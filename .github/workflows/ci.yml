@@ -1,0 +1,80 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Cancel older runs on the same ref when a new commit lands (saves CI minutes).
+# Safe interpolation: github.workflow is a fixed workflow name; github.ref is a
+# validated git ref identifier (not user-controlled free-form input). Neither
+# reaches a run: step, so no command-injection surface here.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint + Prettier
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      - run: pnpm format:check
+
+  typecheck:
+    name: TypeScript
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # Prisma client is generated, not committed — typecheck needs it.
+      - run: pnpm prisma generate
+      - run: pnpm typecheck
+
+  build:
+    name: Next.js build
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: nextjs_prisma_vercel_starter
+          POSTGRES_PASSWORD: nextjs_prisma_vercel_starter
+          POSTGRES_DB: nextjs_prisma_vercel_starter
+        ports:
+          - 5432:5432
+        # Wait until pg_isready returns OK before the job's steps start.
+        options: >-
+          --health-cmd "pg_isready -U nextjs_prisma_vercel_starter -d nextjs_prisma_vercel_starter"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 15
+    env:
+      # In CI we use the standard 5432 (no port collisions in clean runner).
+      DATABASE_URL: postgresql://nextjs_prisma_vercel_starter:nextjs_prisma_vercel_starter@localhost:5432/nextjs_prisma_vercel_starter
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # Prisma 7's `migrate deploy` does not auto-generate the client (unlike
+      # `migrate dev`); next build's internal `tsc` then can't resolve
+      # PrismaClient. Generate explicitly before build.
+      - run: pnpm prisma generate
+      - run: pnpm prisma migrate deploy
+      - run: pnpm build
