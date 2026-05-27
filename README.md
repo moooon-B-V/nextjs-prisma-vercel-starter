@@ -99,45 +99,63 @@ Then connect to Vercel + Neon when you're ready to ship.
 
 ## Scripts
 
-| Script              | What it does                                 |
-| ------------------- | -------------------------------------------- |
-| `pnpm dev`          | Start the dev server on `localhost:3000`     |
-| `pnpm build`        | Production build (must pass with 0 warnings) |
-| `pnpm start`        | Start the production server                  |
-| `pnpm lint`         | Run ESLint                                   |
-| `pnpm format`       | Run Prettier and write fixes in place        |
-| `pnpm format:check` | Run Prettier in check mode (used by CI)      |
-| `pnpm typecheck`    | Run `tsc --noEmit`                           |
+| Script              | What it does                                                        |
+| ------------------- | ------------------------------------------------------------------- |
+| `pnpm dev`          | Start the dev server on `localhost:3000`                            |
+| `pnpm build`        | Apply pending Prisma migrations, then production build (0 warnings) |
+| `pnpm start`        | Start the production server                                         |
+| `pnpm lint`         | Run ESLint                                                          |
+| `pnpm format`       | Run Prettier and write fixes in place                               |
+| `pnpm format:check` | Run Prettier in check mode (used by CI)                             |
+| `pnpm typecheck`    | Run `tsc --noEmit`                                                  |
+| `pnpm test`         | Run Vitest unit / integration tests against a real Postgres         |
+| `pnpm test:e2e`     | Run Playwright E2E tests (spawns the dev server automatically)      |
 
 ## Project layout
 
 ```
-app/          Next.js App Router routes — your pages and route handlers
-components/   React UI primitives — empty; add your design system here
-lib/          Server-side logic. `lib/db.ts` exports the singleton Prisma client.
+app/          Next.js App Router routes — your pages and route handlers.
+              `(auth)/` — sign-in, sign-up, reset-password (plain Tailwind).
+              `(authed)/` — gated routes (smoke `dashboard/page.tsx`).
+              `api/auth/[...all]/route.ts` — Better-Auth catch-all handler.
+components/   React UI primitives — empty; add your design system here.
+lib/          Server-side logic.
+              `db.ts` — singleton Prisma client.
+              `auth/` — Better-Auth instance, client SDK, argon2 wrappers.
+              `users/` — user repo + typed errors.
+              `email.ts` — pluggable email-sending abstraction.
+              `test-oauth-mock.ts` — Node-only Google token-endpoint mock
+              for E2E (dormant unless E2E_TEST_OAUTH=1).
+middleware.ts Edge middleware — gates the `(authed)` route group.
+instrumentation.ts  Next.js boot hook — installs the OAuth mock for E2E.
 prisma/       Prisma schema + migrations. Edit `schema.prisma`, run
               `pnpm prisma migrate dev --name <description>` to generate a
               new migration.
-tests/        Add your tests here (Vitest, Playwright, your choice).
+tests/        Vitest integration tests (real Postgres) + Playwright E2E
+              specs in `tests/e2e/`. See `playwright.config.ts` and
+              `vitest.config.ts`.
 docs/         Project docs.
 scripts/      Dev scripts. `db-up.sh` brings up Docker Postgres + migrations.
 public/       Static assets.
 .github/
-  workflows/  CI definitions.
+  workflows/  CI definitions (lint, typecheck, build, e2e) and cleanup.
 ```
 
 ## CI
 
 Runs on every PR and push to `main` via [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
-Three parallel jobs:
+Four jobs:
 
-- **Lint** — `pnpm lint` + `pnpm format:check`
-- **TypeScript** — `pnpm prisma generate` then `pnpm typecheck`
-- **Build** — `pnpm prisma migrate deploy` then `pnpm build`, against a
-  Postgres 16 service container
+- **Lint** — `pnpm lint` + `pnpm format:check` (parallel)
+- **TypeScript** — `pnpm prisma generate` then `pnpm typecheck` (parallel)
+- **Build** — `pnpm build` (runs `prisma migrate deploy && next build`),
+  against a Postgres 16 service container (parallel)
+- **Playwright E2E** — `pnpm test:e2e` against the same Postgres image,
+  after the build job (sequential — no point burning E2E minutes on a
+  red build)
 
 The Husky pre-commit hook catches lint/format issues before they reach CI;
-CI is the backstop. Total runtime targets <3 min on a fresh clone.
+CI is the backstop. Total runtime targets <5 min on a fresh clone.
 
 ## Customizing for your project
 
@@ -156,6 +174,86 @@ After clicking "Use this template," you'll want to rename a few things:
 The migration in `prisma/migrations/20260521222036_init/` is named
 generically (`init`); you can leave it or delete it after generating your
 own first migration.
+
+## Auth
+
+This starter ships pre-wired email/password + Google OAuth via
+[Better-Auth](https://www.better-auth.com), with argon2id hashing, password
+reset by email link, session cookies, and edge middleware that gates the
+`/dashboard/*` routes. The auth pages (`/sign-in`, `/sign-up`,
+`/reset-password`, `/reset-password/new`) are rewritten in plain Tailwind
+so they render reasonably out of the box; restyle them when you add your
+real design system.
+
+### What's already there
+
+- **Schema**: `User`, `Account`, `Session`, `Verification` tables (matching
+  Better-Auth's adapter conventions) in
+  [`prisma/schema.prisma`](prisma/schema.prisma).
+- **Server-side config**: [`lib/auth/index.ts`](lib/auth/index.ts) — Better-Auth
+  instance with the auto-link policy for Google, rate limiting (3/hour on
+  password-reset), and cookie hardening pinned for review.
+- **Client SDK**: [`lib/auth/client.ts`](lib/auth/client.ts) — exports `signIn`,
+  `signOut`, `signUp`, `useSession` for client components.
+- **Repo layer**: [`lib/users/repo.ts`](lib/users/repo.ts) — `createUser`,
+  `verifyPassword`, `findOrCreateOAuthUser` for any direct-DB code path.
+- **API route**: [`app/api/auth/[...all]/route.ts`](app/api/auth/[...all]/route.ts) — Better-Auth's
+  catch-all handler at `/api/auth/*`.
+- **Middleware**: [`middleware.ts`](middleware.ts) — optimistic cookie check
+  at the edge for protected routes.
+- **Smoke route**: [`app/(authed)/dashboard/page.tsx`](<app/(authed)/dashboard/page.tsx>) —
+  proves the gate and `getSession()` work end-to-end. Replace with your
+  real dashboard.
+- **Tests**: Vitest integration tests in [`tests/`](tests/) hit a real
+  Postgres; Playwright specs in [`tests/e2e/`](tests/e2e/) drive the
+  full sign-up / sign-in / Google / password-reset flows. The Google OAuth
+  E2E is intercepted at the HTTP boundary (see [`lib/test-oauth-mock.ts`](lib/test-oauth-mock.ts))
+  so nothing leaves localhost.
+
+### Required environment variables
+
+Set these wherever you deploy (Vercel: Settings → Environment Variables;
+local: `.env`).
+
+- `BETTER_AUTH_SECRET` — random 32-byte secret. Generate with
+  `openssl rand -base64 32`. Rotating invalidates all active sessions.
+- `BETTER_AUTH_URL` — public origin (e.g. `https://your-app.vercel.app`).
+  Optional locally (defaults to `http://localhost:3000`); MUST be set in
+  production so OAuth callback URLs are correct.
+- `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` — from
+  Google Cloud Console → APIs & Services → Credentials → OAuth 2.0 Client
+  ID (Web application). Authorized redirect URI:
+  `{BETTER_AUTH_URL}/api/auth/callback/google`. Required at module load —
+  missing values throw immediately so misconfiguration surfaces loudly.
+- `EMAIL_PROVIDER` — `console` (default) for dev. Real providers
+  (`resend`, `postmark`) are NOT YET WIRED: choose one and implement it in
+  [`lib/email.ts`](lib/email.ts) before going to production with password
+  reset enabled.
+
+If you don't want Google sign-in, delete the `socialProviders.google`
+block from [`lib/auth/index.ts`](lib/auth/index.ts) and remove
+`<GoogleButton />` from the sign-in / sign-up pages.
+
+### Cleanup workflow (preview database branches)
+
+[`cleanup-preview-deployments.yml`](.github/workflows/cleanup-preview-deployments.yml)
+deletes Vercel preview deployments when their PR closes, which cascades
+to deleting the linked Neon (or other Marketplace-managed) database
+branch — without it, preview branches accumulate against your free-tier
+cap and new PR previews start failing with "Resource provisioning failed".
+
+It needs three pieces of GitHub repo configuration (Settings → Secrets and
+variables → Actions):
+
+| Where         | Name                | Value                                                   |
+| ------------- | ------------------- | ------------------------------------------------------- |
+| **Secrets**   | `VERCEL_TOKEN`      | A Vercel Access Token with deployment-delete permission |
+| **Variables** | `VERCEL_ORG_ID`     | Your team/account ID (visible in `.vercel/repo.json`)   |
+| **Variables** | `VERCEL_PROJECT_ID` | Your Vercel project ID (visible in `.vercel/repo.json`) |
+
+`VERCEL_ORG_ID` and `VERCEL_PROJECT_ID` are stored as variables (not
+secrets) because they appear in the linked `.vercel/repo.json` and aren't
+sensitive — anyone with repo access can already see them.
 
 ## License
 
