@@ -126,7 +126,7 @@ lib/          Server-side logic.
               `email.ts` — pluggable email-sending abstraction.
               `test-oauth-mock.ts` — Node-only Google token-endpoint mock
               for E2E (dormant unless E2E_TEST_OAUTH=1).
-middleware.ts Edge middleware — gates the `(authed)` route group.
+proxy.ts      Next.js Proxy (formerly middleware) — gates the `(authed)` route group.
 instrumentation.ts  Next.js boot hook — installs the OAuth mock for E2E.
 prisma/       Prisma schema + migrations. Edit `schema.prisma`, run
               `pnpm prisma migrate dev --name <description>` to generate a
@@ -199,8 +199,9 @@ real design system.
   `verifyPassword`, `findOrCreateOAuthUser` for any direct-DB code path.
 - **API route**: [`app/api/auth/[...all]/route.ts`](app/api/auth/[...all]/route.ts) — Better-Auth's
   catch-all handler at `/api/auth/*`.
-- **Middleware**: [`middleware.ts`](middleware.ts) — optimistic cookie check
-  at the edge for protected routes.
+- **Proxy**: [`proxy.ts`](proxy.ts) — optimistic cookie check on every
+  request to a protected route (Next.js 16's Proxy convention,
+  [formerly known as middleware](https://nextjs.org/docs/messages/middleware-to-proxy)).
 - **Smoke route**: [`app/(authed)/dashboard/page.tsx`](<app/(authed)/dashboard/page.tsx>) —
   proves the gate and `getSession()` work end-to-end. Replace with your
   real dashboard.
