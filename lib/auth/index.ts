@@ -138,8 +138,14 @@ export const auth = betterAuth({
   // The path here is /request-password-reset (not /forget-password):
   // that's the canonical endpoint mounted by better-auth@1.6.11's
   // password.mjs route module.
+  // PRODECT_FINDINGS #9: Better-Auth groups /sign-in, /sign-up,
+  // /change-password, /change-email into one IP-keyed bucket (window 10s,
+  // max 3). Multi-user E2E flows sign up several users from localhost (one IP)
+  // inside that window and hit 429s. The `E2E_DISABLE_RATE_LIMIT=1` flag is an
+  // explicit opt-in set ONLY in playwright.config.ts's webServer.env — prod
+  // never sets it, so the limiter stays fully active in production.
   rateLimit: {
-    enabled: true,
+    enabled: process.env['E2E_DISABLE_RATE_LIMIT'] !== '1',
     customRules: {
       '/request-password-reset': {
         window: 3600,
