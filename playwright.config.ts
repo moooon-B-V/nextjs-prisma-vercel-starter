@@ -8,6 +8,17 @@ import { config as loadEnv } from 'dotenv';
 // the repo root before defineConfig() runs.
 loadEnv();
 
+// PRODECT_FINDINGS #8: the suite used to hardcode http://localhost:3000 for
+// baseURL, webServer.url, and (implicitly) Better-Auth's trustedOrigins,
+// blocking parallel-worktree runs while a sibling owned :3000. baseURL,
+// webServer.url, the dev-server port, and BETTER_AUTH_URL (which lib/auth
+// threads into both baseURL and trustedOrigins) now all derive from one
+// source. Usage:  E2E_BASE_URL=http://localhost:3100 pnpm test:e2e  (or
+// PORT=3100). Default stays :3000 so existing invocations are unchanged.
+const USING_CUSTOM_ORIGIN = Boolean(process.env['E2E_BASE_URL']) || Boolean(process.env['PORT']);
+const BASE_URL = process.env['E2E_BASE_URL'] ?? `http://localhost:${process.env['PORT'] ?? '3000'}`;
+const PORT = new URL(BASE_URL).port || '3000';
+
 /**
  * Playwright config for the starter's E2E auth smoke suite.
  *
@@ -46,7 +57,7 @@ export default defineConfig({
     : [['list'], ['html', { open: 'never', outputFolder: 'out/playwright-report' }]],
   outputDir: 'out/playwright-output',
   use: {
-    baseURL: 'http://localhost:3000',
+    baseURL: BASE_URL,
     // Trace on failure keeps zips small (one per failing test) while
     // giving full debugging context.
     trace: 'retain-on-failure',
@@ -65,9 +76,12 @@ export default defineConfig({
     // environments write reset emails to a file the specs can read.
     // NODE_ENV is left unset (Next dev sets it to 'development') so the
     // 'file' provider's production-guard doesn't fire.
-    command: 'pnpm dev',
-    url: 'http://localhost:3000',
-    reuseExistingServer: !process.env['CI'],
+    command: `pnpm dev --port ${PORT}`,
+    url: BASE_URL,
+    // Reuse a running dev server locally for fast iteration — but NEVER when a
+    // custom origin was requested (a worktree run), since the only server that
+    // could be reused on that port is a sibling's, running different code.
+    reuseExistingServer: !process.env['CI'] && !USING_CUSTOM_ORIGIN,
     timeout: 120_000,
     stdout: 'pipe',
     stderr: 'pipe',
@@ -82,6 +96,13 @@ export default defineConfig({
       // untouched.
       E2E_TEST_OAUTH: '1',
       E2E_TEST_OAUTH_USER_PATH: path.resolve('/tmp/starter-test-oauth-user.json'),
+      // PRODECT_FINDINGS #8: hand the dev server the same origin Playwright
+      // drives, so /api/auth/* POSTs pass Better-Auth's CSRF origin guard on a
+      // non-default port (lib/auth reads BETTER_AUTH_URL into trustedOrigins).
+      BETTER_AUTH_URL: BASE_URL,
+      // PRODECT_FINDINGS #9: disable Better-Auth's shared sign-in/sign-up
+      // rate-limit bucket for the E2E dev server only (prod never sets this).
+      E2E_DISABLE_RATE_LIMIT: '1',
     },
   },
 });
