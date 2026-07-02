@@ -89,13 +89,69 @@ Then connect to Vercel + Neon when you're ready to ship.
 - **Runtime**: [Node.js](https://nodejs.org) ≥22 (pnpm 11 requires it)
 - **Framework**: [Next.js 16](https://nextjs.org) (App Router, React Server Components, Turbopack)
 - **Language**: [TypeScript](https://www.typescriptlang.org) (strict mode; `noUncheckedIndexedAccess`, `noImplicitOverride`, `noFallthroughCasesInSwitch`)
-- **Styling**: [Tailwind CSS v4](https://tailwindcss.com)
+- **Styling**: [Tailwind CSS v4](https://tailwindcss.com) + [`@motir/design-system`](https://www.npmjs.com/package/@motir/design-system) — Motir's 3-axis design system (Colour · Style · Type), wired in out of the box (see [Design system](#design-system))
 - **Database**: [Postgres 16](https://www.postgresql.org) (local Docker; managed [Neon](https://neon.tech) in production via the [Vercel-Neon integration](https://vercel.com/marketplace/neon))
 - **ORM**: [Prisma 7](https://www.prisma.io) with [`@prisma/adapter-pg`](https://www.npmjs.com/package/@prisma/adapter-pg)
 - **Lint / format**: [ESLint 9](https://eslint.org) (flat config) + [Prettier 3](https://prettier.io) + [Husky](https://typicode.github.io/husky) pre-commit + [lint-staged](https://github.com/lint-staged/lint-staged)
 - **Package manager**: [pnpm](https://pnpm.io) (pinned via `packageManager` field; use `corepack enable`)
 - **CI**: [GitHub Actions](https://docs.github.com/actions) — 3 parallel jobs (lint, typecheck, build with Postgres service container)
 - **Deploy**: [Vercel](https://vercel.com) with [Neon Postgres](https://neon.tech) (per-PR isolated DB branches for preview deploys)
+
+## Design system
+
+This starter ships **Motir's 3-axis design system** — Colour (palette), Style
+(shape / feel), and Type (font pairing) — already wired in, so a freshly
+scaffolded product looks designed out of the box.
+
+**Distribution: a versioned dependency on the public npm registry.** The design
+system lives in one place — the [`@motir/design-system`](https://www.npmjs.com/package/@motir/design-system)
+package (source: `motir-core/packages/design-system`) — and is consumed here as
+a normal caret-ranged dependency (`"@motir/design-system": "^0.1.0"`). It is
+**GPL-3.0 and public**, so there is **no registry auth at install time** — a
+scaffold agent or a scaffolded product just `pnpm add @motir/design-system` like
+any public package. Updates arrive through normal `pnpm update` within the
+pinned major; the token contract (the `--el-*` names, the `data-*` attribute
+set, the theme-apply API) is the semver surface. This is the mechanism fixed by
+the keystone ADR (`motir-core/docs/decisions/design-system-package.md`);
+publishing to a private registry, a git dependency, and a vendored/synced copy
+were all considered and rejected there. **There is no hand-copied token CSS or
+primitive source in this repo** — the package is the single source of truth, so
+the design system can never drift into a second, divergent copy.
+
+**What's wired:**
+
+- **`app/globals.css`** imports the whole token layer with one line —
+  `@import '@motir/design-system/theme.css';` — giving you the Tailwind v4
+  `@theme` preset, the Tier-3 `--el-*` element tokens, and every
+  `[data-palette]` / `[data-style]` / `[data-type]` / `[data-surface]` swap
+  block. Reference colour through the `--el-*` tokens (e.g.
+  `text-(--el-text)`, `bg-(--el-surface)`), never raw hexes.
+- **`app/layout.tsx`** loads the type-axis fonts (as `--font-*-source`
+  variables), sets the **default** design on `<html>` (Colour `motir` · Style
+  `warm-editorial` · Type `motir`) via `resolveAxesToApplied({})`, renders the
+  FOUC-safe `buildThemeInitScript(null)`, and wraps the app in the package's
+  `ThemeProvider` + `ToastProvider`.
+- **`@/components/ui`** re-exports the primitives (`Button`, `Card`, `Modal`,
+  `Input`, `Pill`, …) — or import them directly from `@motir/design-system`.
+- **`/tokens`** renders the package's live `TokensSpecimen` — the same specimen
+  motir-core uses — so you have an always-in-sync reference of every primitive
+  plus the axis pickers to preview the swaps live.
+
+**Applying a specific choice.** To ship a non-default design, resolve the axes
+and pass them to both the init script and the provider (the same seam
+motir-core's scaffold agent uses to re-apply a planner-stored choice):
+
+```tsx
+import { resolveAxesToApplied, buildThemeInitScript } from '@motir/design-system';
+const applied = resolveAxesToApplied({ styleId, paletteId, typeId }); // your choice
+// <html data-style={applied.styleId} data-palette={applied.paletteId} data-type={applied.typeId}>
+// <script dangerouslySetInnerHTML={{ __html: buildThemeInitScript(applied) }} />
+```
+
+> **`nextjs-prisma-vercel-starter-with-design`** was an earlier, partial
+> hand-copied port of the design system. It is **superseded** by this
+> package-based wiring (per the ADR) and should be archived — this repo is the
+> single design-system-enabled starter.
 
 ## Scripts
 
@@ -118,7 +174,10 @@ app/          Next.js App Router routes — your pages and route handlers.
               `(auth)/` — sign-in, sign-up, reset-password (plain Tailwind).
               `(authed)/` — gated routes (smoke `dashboard/page.tsx`).
               `api/auth/[...all]/route.ts` — Better-Auth catch-all handler.
-components/   React UI primitives — empty; add your design system here.
+components/   React UI primitives. `ui/index.ts` re-exports the
+              `@motir/design-system` primitives (Button, Card, Modal, …) so app
+              code imports them from `@/components/ui` — no hand-copied source.
+              `LocaleToggle.tsx` — the starter's plain locale switcher.
 lib/          Server-side logic.
               `db.ts` — singleton Prisma client.
               `auth/` — Better-Auth instance, client SDK, argon2 wrappers.
