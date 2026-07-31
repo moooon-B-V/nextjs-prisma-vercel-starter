@@ -39,6 +39,11 @@ const PORT = new URL(BASE_URL).port || '3000';
  */
 export default defineConfig({
   testDir: 'tests/e2e',
+  // Acceptance specs belong to their OWN lane (playwright.acceptance.config.ts),
+  // which records `video: 'on'` and publishes the clip as the story's acceptance
+  // receipt. Without this ignore they would ALSO run here — unrecorded, and
+  // paced-for-a-human, so slow for no benefit (MOTIR-1941).
+  testIgnore: /acceptance.*\.spec\.ts/,
   // Each spec has its own truncate + sign-up flow; 30s is plenty for the
   // longest path (request reset → poll file outbox → follow link → set
   // new password).

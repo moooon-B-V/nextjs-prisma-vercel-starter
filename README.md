@@ -155,17 +155,18 @@ const applied = resolveAxesToApplied({ styleId, paletteId, typeId }); // your ch
 
 ## Scripts
 
-| Script              | What it does                                                        |
-| ------------------- | ------------------------------------------------------------------- |
-| `pnpm dev`          | Start the dev server on `localhost:3000`                            |
-| `pnpm build`        | Apply pending Prisma migrations, then production build (0 warnings) |
-| `pnpm start`        | Start the production server                                         |
-| `pnpm lint`         | Run ESLint                                                          |
-| `pnpm format`       | Run Prettier and write fixes in place                               |
-| `pnpm format:check` | Run Prettier in check mode (used by CI)                             |
-| `pnpm typecheck`    | Run `tsc --noEmit`                                                  |
-| `pnpm test`         | Run Vitest unit / integration tests against a real Postgres         |
-| `pnpm test:e2e`     | Run Playwright E2E tests (spawns the dev server automatically)      |
+| Script                     | What it does                                                        |
+| -------------------------- | ------------------------------------------------------------------- |
+| `pnpm dev`                 | Start the dev server on `localhost:3000`                            |
+| `pnpm build`               | Apply pending Prisma migrations, then production build (0 warnings) |
+| `pnpm start`               | Start the production server                                         |
+| `pnpm lint`                | Run ESLint                                                          |
+| `pnpm format`              | Run Prettier and write fixes in place                               |
+| `pnpm format:check`        | Run Prettier in check mode (used by CI)                             |
+| `pnpm typecheck`           | Run `tsc --noEmit`                                                  |
+| `pnpm test`                | Run Vitest unit / integration tests against a real Postgres         |
+| `pnpm test:e2e`            | Run Playwright E2E tests (spawns the dev server automatically)      |
+| `pnpm test:e2e:acceptance` | Run the acceptance-video lane (records a clip per story flow)       |
 
 ## Project layout
 
@@ -203,7 +204,7 @@ public/       Static assets.
 ## CI
 
 Runs on every PR and push to `main` via [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
-Four jobs:
+Jobs:
 
 - **Lint** — `pnpm lint` + `pnpm format:check` (parallel)
 - **TypeScript** — `pnpm prisma generate` then `pnpm typecheck` (parallel)
@@ -212,6 +213,11 @@ Four jobs:
 - **Playwright E2E** — `pnpm test:e2e` against the same Postgres image,
   after the build job (sequential — no point burning E2E minutes on a
   red build)
+- **Acceptance video** — records the story-acceptance clip and publishes it
+  to Motir. **Opt-in by authoring a spec:** the job is ABSENT unless the PR
+  changes a `tests/e2e/acceptance*.spec.ts`, and it publishes only the
+  recordings produced by the specs that PR changed. See
+  [`docs/acceptance-video.md`](docs/acceptance-video.md).
 
 The Husky pre-commit hook catches lint/format issues before they reach CI;
 CI is the backstop. Total runtime targets <5 min on a fresh clone.
