@@ -1,0 +1,102 @@
+name: Upload acceptance video
+description: >
+  VENDORED from motir-core (MOTIR-1941) — see docs/acceptance-video.md for why it
+  is a copy rather than a remote reference.
+
+  Publish a green acceptance E2E's recorded video (+ trace + chapters) to a Motir
+  story as pending acceptance evidence (Story MOTIR-1627, BYOK). Run it AFTER the
+  acceptance E2E step and only on success — a red run records no video, so this is
+  a no-op. Auth is KEYLESS GitHub OIDC when the repo is connected via the Motir
+  GitHub App — the calling JOB must grant `permissions: id-token: write` (no
+  secret needed); otherwise pass a `token` (the `integration`-scope PAT fallback).
+
+inputs:
+  story-key:
+    description: >
+      (Override) An explicit story key to attach the evidence to (e.g.
+      MOTIR-1627). Leave empty to RESOLVE the target (MOTIR-1684): the recording's
+      self-declared story → the PR's `MOTIR-<id>` (pr-ref / pr-title, resolved to
+      its parent story server-side) → `fallback-story-key`.
+    required: false
+    default: ''
+  pr-ref:
+    description: >
+      The PR head ref (branch) carrying the `MOTIR-<id>` — pass
+      `${{ github.head_ref }}`. Used only when `story-key` is empty and the
+      recording did not self-declare a story.
+    required: false
+    default: ''
+  pr-title:
+    description: >
+      The PR title carrying the `MOTIR-<id>` (the status-sync convention) — pass
+      `${{ github.event.pull_request.title }}`. Parsed when `pr-ref` has no key.
+    required: false
+    default: ''
+  fallback-story-key:
+    description: >
+      The story key used when nothing else resolves (e.g. push-to-main with no
+      PR, and no self-declared recording story). The MOTIR-1627 dogfood.
+    required: false
+    default: ''
+  token:
+    description: >
+      (Fallback) A Motir API token with the `integration` scope, for a repo NOT
+      connected via the Motir GitHub App. Store it as a secret. Leave empty to use
+      keyless GitHub OIDC (requires `permissions: id-token: write` on the job).
+    required: false
+    default: ''
+  audience:
+    description: The OIDC audience the token is minted for (must match the server).
+    required: false
+    default: motir-acceptance-video
+  base-url:
+    description: The Motir base URL.
+    required: false
+    default: https://app.motir.co
+  output-dir:
+    description: The Playwright acceptance lane's output dir.
+    required: false
+    default: out/playwright-output-acceptance
+  changed-specs:
+    description: >
+      The acceptance spec files THIS run changed, whitespace- or comma-separated
+      (`git diff --name-only <base> HEAD -- 'tests/e2e/acceptance*.spec.ts'` drops
+      in unchanged). A recording is published only when its own spec is in this
+      list (MOTIR-1937).
+
+      ⚠️ REQUIRED in practice. Publishing SUPERSEDES a story's current evidence,
+      and each recording targets its OWN declared story rather than the PR's — so
+      a run that publishes everything it recorded replaces the receipts of every
+      story that has an acceptance spec. Leaving this empty is FAIL-CLOSED: the
+      run rehearses (discovers, resolves, checks watchability) and writes nothing.
+
+      Gate on the changed spec rather than on the branch: the acceptance panel's
+      approve edge is `in_review → done`, and `in_review` is the PR-OPEN state, so
+      the receipt must be written while the PR is open or the reviewer can never
+      watch-then-approve.
+    required: false
+    default: ''
+  produced-by:
+    description: The E2E subtask key that produced the video (e.g. MOTIR-1638).
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      # GitHub injects ACTIONS_ID_TOKEN_REQUEST_URL/_TOKEN here automatically when
+      # the job has `id-token: write` — the uploader exchanges them for the OIDC
+      # token, so nothing to pass through. MOTIR_UPLOAD_TOKEN is the PAT fallback.
+      env:
+        MOTIR_UPLOAD_TOKEN: ${{ inputs.token }}
+        MOTIR_OIDC_AUDIENCE: ${{ inputs.audience }}
+        MOTIR_BASE_URL: ${{ inputs.base-url }}
+        ACCEPTANCE_STORY_KEY: ${{ inputs.story-key }}
+        ACCEPTANCE_PR_REF: ${{ inputs.pr-ref }}
+        ACCEPTANCE_PR_TITLE: ${{ inputs.pr-title }}
+        ACCEPTANCE_FALLBACK_STORY_KEY: ${{ inputs.fallback-story-key }}
+        ACCEPTANCE_OUTPUT_DIR: ${{ inputs.output-dir }}
+        ACCEPTANCE_PRODUCED_BY: ${{ inputs.produced-by }}
+        ACCEPTANCE_CHANGED_SPECS: ${{ inputs.changed-specs }}
+      run: node scripts/upload-acceptance-video.mjs
