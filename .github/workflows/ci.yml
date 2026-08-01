@@ -13,10 +13,27 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# WHERE THESE JOBS RUN — `vars.MOTIR_RUNNER`, with a GitHub-hosted default.
+#
+# Every job below picks its runner through `${{ vars.MOTIR_RUNNER ||
+# 'ubuntu-latest' }}` rather than hardcoding a label. `MOTIR_RUNNER` is a
+# MOTIR-MANAGED Actions variable: Motir sets it (to its own ephemeral fleet's
+# label) while Motir hosts and pays for this repo's CI. CLEARING OR DELETING IT
+# RETURNS THE REPO TO GITHUB-HOSTED RUNNERS — no edit to this file is needed.
+#
+# That is the whole point: a repo handed over to its owner has zero self-hosted
+# runners, so a hardcoded `runs-on: [self-hosted, motir]` would leave every job
+# queued for 24h and then dropped. An unset variable evaluates to the empty
+# string, which is falsy, so `||` yields the literal `ubuntu-latest` and CI keeps
+# working on the new owner's GitHub minutes. Portable by construction.
+#
+#   - unset `vars.*` -> empty string: docs.github.com/en/actions/reference/contexts-reference#vars-context
+#   - `""` is falsy:   docs.github.com/en/actions/reference/workflows-and-actions/expressions
+#   - `vars` is available to the `runs-on` key (context availability table, contexts reference)
 jobs:
   lint:
     name: Lint + Prettier
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.MOTIR_RUNNER || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -30,7 +47,7 @@ jobs:
 
   typecheck:
     name: TypeScript
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.MOTIR_RUNNER || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -101,7 +118,7 @@ jobs:
 
   build:
     name: Next.js build
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.MOTIR_RUNNER || 'ubuntu-latest' }}
     services:
       postgres:
         image: postgres:16-alpine
@@ -163,7 +180,7 @@ jobs:
   # and skipped.
   acceptance-specs:
     name: Changed acceptance specs
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.MOTIR_RUNNER || 'ubuntu-latest' }}
     outputs:
       specs: ${{ steps.detect.outputs.specs }}
     steps:
@@ -191,7 +208,7 @@ jobs:
 
   e2e:
     name: Playwright E2E
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.MOTIR_RUNNER || 'ubuntu-latest' }}
     # Wait for the build job — E2E is more expensive than a build failure
     # surfaces and there's no point burning Playwright minutes if `next
     # build` is red.
@@ -264,7 +281,7 @@ jobs:
 
   acceptance:
     name: Acceptance video
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.MOTIR_RUNNER || 'ubuntu-latest' }}
     # Wait for the build job — E2E is more expensive than a build failure
     # surfaces and there's no point burning Playwright minutes if `next
     # build` is red.
