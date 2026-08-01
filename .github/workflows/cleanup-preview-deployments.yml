@@ -27,6 +27,12 @@
 #     (visible in `.vercel/repo.json` once `vercel link` runs locally, or
 #     in the Vercel dashboard under Settings → General).
 #   vars.VERCEL_PROJECT_ID — the Vercel project's ID, same source as above.
+#   vars.MOTIR_RUNNER      — OPTIONAL, and MOTIR-MANAGED. Selects which runner
+#     this job (and every job in ci.yml) runs on. Motir sets it while Motir
+#     hosts and pays for this repo's CI; CLEARING OR DELETING IT RETURNS THE
+#     REPO TO GITHUB-HOSTED RUNNERS (`ubuntu-latest`) with no edit to this
+#     file. This job closes PRs and is billable like any other, so it takes
+#     the same seam. See the block above `jobs:` in ci.yml.
 #
 # We use VARIABLES (not secrets) for the org/project IDs because they
 # already appear in `.vercel/repo.json` whenever the project is linked,
@@ -54,7 +60,7 @@ concurrency:
 jobs:
   remove-deployments:
     name: Delete preview deployments
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.MOTIR_RUNNER || 'ubuntu-latest' }}
     permissions:
       contents: read
     env:

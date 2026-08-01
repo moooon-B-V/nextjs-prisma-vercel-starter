@@ -222,6 +222,25 @@ Jobs:
 The Husky pre-commit hook catches lint/format issues before they reach CI;
 CI is the backstop. Total runtime targets <5 min on a fresh clone.
 
+### Where CI runs — `vars.MOTIR_RUNNER`
+
+Every job in both workflows picks its runner through
+`runs-on: ${{ vars.MOTIR_RUNNER || 'ubuntu-latest' }}` instead of a hardcoded
+label. `MOTIR_RUNNER` is a **Motir-managed** Actions variable:
+
+- **While Motir hosts this repo**, Motir sets `MOTIR_RUNNER` to its own
+  ephemeral runner fleet's label, and CI runs there — on Motir's bill.
+- **Clearing or deleting the variable returns the repo to GitHub-hosted
+  runners** (`ubuntu-latest`), with no edit to any workflow file. An unset
+  variable evaluates to the empty string, which is falsy, so `||` yields the
+  literal default.
+
+That is what makes a repo handed over to its owner keep working: a transferred
+repo has no self-hosted runners, and a hardcoded `runs-on: [self-hosted, …]`
+would leave every job queued until GitHub drops it. If you own this repo and
+are not using Motir's fleet, you do not need to do anything — just leave
+`MOTIR_RUNNER` unset.
+
 ## Customizing for your project
 
 After clicking "Use this template," you'll want to rename a few things:
