@@ -198,7 +198,7 @@ docs/         Project docs.
 scripts/      Dev scripts. `db-up.sh` brings up Docker Postgres + migrations.
 public/       Static assets.
 .github/
-  workflows/  CI definitions (lint, typecheck, build, e2e) and cleanup.
+  workflows/  CI definitions (lint, typecheck, unit, build, e2e) and cleanup.
 ```
 
 ## CI
@@ -208,6 +208,10 @@ Jobs:
 
 - **Lint** — `pnpm lint` + `pnpm format:check` (parallel)
 - **TypeScript** — `pnpm prisma generate` then `pnpm typecheck` (parallel)
+- **Unit tests** — `pnpm test` (Vitest) against a Postgres 16 service
+  container (parallel). The suites in `tests/*.test.ts` are integration
+  tests against a real database, so the job migrates it first — the same
+  setup the E2E job uses, minus the browser.
 - **Build** — `pnpm build` (runs `prisma migrate deploy && next build`),
   against a Postgres 16 service container (parallel)
 - **Playwright E2E** — `pnpm test:e2e` against the same Postgres image,
