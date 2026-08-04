@@ -49,11 +49,11 @@ suite, and the main suite `testIgnore`s `acceptance*.spec.ts` so nothing runs tw
 
 ## What CI does
 
-| Run                                              | Records + checks | Publishes          |
-| ------------------------------------------------ | ---------------- | ------------------ |
-| PR that changes `tests/e2e/acceptance-X.spec.ts` | yes              | **only X's story** |
-| PR that changes no acceptance spec               | **job absent**   | nothing            |
-| Push to the default branch                       | job absent       | nothing            |
+| Run                                              | Records + checks  | Publishes          |
+| ------------------------------------------------ | ----------------- | ------------------ |
+| PR that changes `tests/e2e/acceptance-X.spec.ts` | yes               | **only X's story** |
+| PR that changes no acceptance spec               | **no run at all** | nothing            |
+| Push to the default branch                       | no run at all     | nothing            |
 
 Two properties make that scoping necessary rather than tidy:
 
@@ -65,10 +65,27 @@ Two properties make that scoping necessary rather than tidy:
    watched. That is exactly what happened in Motir's own CI before MOTIR-1937: one
    backend PR republished seven already-accepted stories.
 
-So the `acceptance` job is gated on the PR actually changing an acceptance spec
-(the `acceptance-specs` job computes the list), and the uploader publishes only
-the recordings produced by those specs. The gate **fails closed** — an empty list
-owns nothing.
+So the lane lives in its **own workflow**,
+[`.github/workflows/acceptance-video.yml`](../.github/workflows/acceptance-video.yml),
+triggered by `on: pull_request: paths: ['tests/e2e/acceptance*.spec.ts']`, and
+the uploader publishes only the recordings produced by the specs that PR
+changed. The workflow recomputes that list itself (`git diff --name-only` against
+the PR base) and passes it to the uploader, which **fails closed** — an empty
+list owns nothing.
+
+**Why a whole workflow, and not a job with an `if:`?** Because the requirement is
+that a PR owning no acceptance spec shows no acceptance check _at all_, and a
+job-level `if:` does not deliver that: a job whose `if:` is false is still
+reported, as a greyed `Skipped` check — and so is any extra job added just to
+compute the condition. Only a workflow that is never triggered leaves nothing on
+the PR. This starter shipped the `if:` version first, under a comment claiming
+the opposite; measured on PR #8, a PR touching no acceptance spec listed both
+`Acceptance video  skipping` and `Changed acceptance specs  pass` (MOTIR-1958).
+
+The trade is that a separate workflow cannot `needs:` another workflow's job or
+read its artifacts. This lane needs neither — it runs against `pnpm dev` — but it
+no longer waits for a green build, and its `env:` block is a copy of `ci.yml`'s
+`e2e` job rather than a shared one. Change both together.
 
 **Why not just publish from the default branch instead?** Because it breaks the
 flow. Motir's approve action moves a story `in_review → done`, and `in_review` is

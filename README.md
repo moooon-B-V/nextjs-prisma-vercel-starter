@@ -198,7 +198,9 @@ docs/         Project docs.
 scripts/      Dev scripts. `db-up.sh` brings up Docker Postgres + migrations.
 public/       Static assets.
 .github/
-  workflows/  CI definitions (lint, typecheck, unit, build, e2e) and cleanup.
+  workflows/  CI definitions: `ci.yml` (lint, typecheck, unit, build, e2e),
+              `acceptance-video.yml` (paths-filtered story-acceptance lane),
+              and the preview-database cleanup.
 ```
 
 ## CI
@@ -217,18 +219,38 @@ Jobs:
 - **Playwright E2E** — `pnpm test:e2e` against the same Postgres image,
   after the build job (sequential — no point burning E2E minutes on a
   red build)
-- **Acceptance video** — records the story-acceptance clip and publishes it
-  to Motir. **Opt-in by authoring a spec:** the job is ABSENT unless the PR
-  changes a `tests/e2e/acceptance*.spec.ts`, and it publishes only the
-  recordings produced by the specs that PR changed. See
-  [`docs/acceptance-video.md`](docs/acceptance-video.md).
+  The Husky pre-commit hook catches lint/format issues before they reach CI;
+  CI is the backstop. Total runtime targets <5 min on a fresh clone.
 
-The Husky pre-commit hook catches lint/format issues before they reach CI;
-CI is the backstop. Total runtime targets <5 min on a fresh clone.
+### The acceptance-video lane — its own paths-filtered workflow
+
+[`.github/workflows/acceptance-video.yml`](.github/workflows/acceptance-video.yml)
+records the story-acceptance clip and publishes it to Motir. It is **opt-in by
+authoring a spec**, and that opt-in is enforced by the workflow's own trigger:
+
+```yaml
+on:
+  pull_request:
+    paths:
+      - 'tests/e2e/acceptance*.spec.ts'
+```
+
+A PR that changes no acceptance spec never triggers the workflow, so it shows
+**no acceptance check at all** — not a greyed skipped one. That is why the lane
+is a separate file rather than a job in `ci.yml`: a job-level `if:` that
+evaluates false is still REPORTED as a `Skipped` check, and so is any job added
+just to compute the condition. Only an untriggered _workflow_ leaves nothing on
+the PR. On a PR that does change a spec, the lane runs and publishes only the
+recordings produced by the specs that PR changed. See
+[`docs/acceptance-video.md`](docs/acceptance-video.md).
+
+Because it is a separate workflow it cannot depend on `ci.yml`'s `build` job —
+it runs against `pnpm dev` and so needs no build, but it also no longer waits
+for a green one. That cost is only paid on the PRs that own a spec.
 
 ### Where CI runs — `vars.MOTIR_RUNNER`
 
-Every job in both workflows picks its runner through
+Every job in every workflow picks its runner through
 `runs-on: ${{ vars.MOTIR_RUNNER || 'ubuntu-latest' }}` instead of a hardcoded
 label. `MOTIR_RUNNER` is a **Motir-managed** Actions variable:
 

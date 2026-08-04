@@ -1,0 +1,167 @@
+name: Acceptance video
+
+# ── The acceptance-video lane, spec-scoped (MOTIR-1941 / MOTIR-1937 / MOTIR-1958) ──
+#
+# Records the story-acceptance clip on a GREEN run and publishes it to the story
+# in Motir, where a reviewer watches it and approves. See
+# docs/acceptance-video.md for the authoring guide and the publish contract.
+#
+# ⚠️ WHY ITS OWN WORKFLOW, AND NOT A JOB IN ci.yml.
+# The requirement is that a PR which owns no acceptance spec shows NO acceptance
+# check at all. A job-level `if:` does NOT achieve that: a job whose `if:` is
+# false is still REPORTED, as a greyed `Skipped` (`skipping` in `gh pr checks`).
+# A matrix leg cannot be pruned by an expression either. The only mechanism that
+# leaves nothing behind is a workflow that is never TRIGGERED — hence a separate
+# file with a `paths:` filter. No matching file changed → no run → no check.
+#
+# This file replaced exactly that mistake: ci.yml used to carry an
+# `acceptance-specs` detector job feeding an `acceptance` job's `if:`, under a
+# comment claiming the check was "ABSENT — not skipped". It was not. Measured on
+# PR #8 (run 30695963470), a PR touching no acceptance spec listed BOTH
+# `Acceptance video  skipping` and `Changed acceptance specs  pass` (MOTIR-1958).
+#
+# Consequences of being a separate workflow, accepted deliberately:
+#   • It cannot `needs:` ci.yml's `build` job or read that run's artifacts. This
+#     lane needs neither — it runs against `pnpm dev`
+#     (playwright.acceptance.config.ts), not a production build — but it does
+#     mean the lane no longer waits for a green build, so a PR with a broken
+#     build burns these minutes before ci.yml reports. That is the trade for the
+#     check being absent, and it is only paid on the PRs that own a spec.
+#   • Workflows cannot share an `env:` block, so the block below is a deliberate
+#     copy of ci.yml's `e2e` job. CHANGE BOTH TOGETHER.
+#   • There is no `push:` trigger. `main` never runs the lane, which is already
+#     the decision: the PR published the receipt while its story was in review,
+#     and re-publishing post-merge would only supersede it with an identical clip
+#     (docs/acceptance-video.md).
+on:
+  pull_request:
+    paths:
+      - 'tests/e2e/acceptance*.spec.ts'
+
+# Cancel older runs on the same ref when a new commit lands (saves CI minutes).
+# Safe interpolation: github.workflow is a fixed workflow name; github.ref is a
+# validated git ref identifier (not user-controlled free-form input).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  acceptance:
+    name: Acceptance video
+    # Runner selection goes through the `MOTIR_RUNNER` Actions variable rather
+    # than a hardcoded label — the same seam every job in ci.yml uses, and a new
+    # workflow file is a new `runs-on` site. An unset variable is the empty
+    # string, which is falsy, so `||` yields `ubuntu-latest` and a repo with no
+    # self-hosted runners keeps working. See the block above `jobs:` in ci.yml.
+    runs-on: ${{ vars.MOTIR_RUNNER || 'ubuntu-latest' }}
+    permissions:
+      contents: read
+      # Lets the uploader mint a keyless GitHub OIDC token (no secret needed
+      # for a repo connected via the Motir GitHub App).
+      id-token: write
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: nextjs_prisma_vercel_starter
+          POSTGRES_PASSWORD: nextjs_prisma_vercel_starter
+          POSTGRES_DB: nextjs_prisma_vercel_starter
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U nextjs_prisma_vercel_starter -d nextjs_prisma_vercel_starter"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 15
+    env:
+      # In CI Postgres runs on the standard 5432.
+      DATABASE_URL: postgresql://nextjs_prisma_vercel_starter:nextjs_prisma_vercel_starter@localhost:5432/nextjs_prisma_vercel_starter
+      # See ci.yml's build job for the rationale on these throwaway values.
+      # Better-Auth's module-load requiredEnv check needs them present;
+      # the actual OAuth round-trip is intercepted by the undici MockAgent
+      # in instrumentation.ts (E2E_TEST_OAUTH=1 below).
+      BETTER_AUTH_SECRET: ci-e2e-only-not-a-real-secret-do-not-reuse
+      GOOGLE_CLIENT_ID: ci-e2e-placeholder
+      GOOGLE_CLIENT_SECRET: ci-e2e-placeholder
+      # Dev-only file email provider — emails appended as JSON lines to
+      # EMAIL_OUTBOX_PATH so the credentials spec can capture the reset
+      # link. The playwright.acceptance.config.ts's webServer.env block ALSO
+      # sets these on the dev server it spawns, but setting them at the job
+      # level too keeps them visible to anyone reading the workflow file.
+      EMAIL_PROVIDER: file
+      EMAIL_OUTBOX_PATH: /tmp/starter-test-emails.jsonl
+      E2E_TEST_OAUTH: '1'
+      E2E_TEST_OAUTH_USER_PATH: /tmp/starter-test-oauth-user.json
+      # Skip the husky install postinstall — CI has no .git/hooks to wire.
+      HUSKY: '0'
+    steps:
+      - uses: actions/checkout@v4
+
+      # WHICH specs this PR owns. The `paths:` filter above already guarantees
+      # at least one, but the uploader needs the LIST: publishing SUPERSEDES a
+      # story's current evidence and each recording targets its OWN declared
+      # story, so a run that published everything it recorded would replace the
+      # receipts of every other story with a spec (MOTIR-1937). The uploader
+      # FAILS CLOSED, so if this step ever stops producing a list, the run
+      # rehearses instead of resurrecting that bug — belt and braces alongside
+      # the trigger filter.
+      - name: Which acceptance specs does this run own?
+        id: owned-specs
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          # A pull_request checkout is the MERGE commit at depth 1, which carries
+          # both parents — so the base is normally already present. Fetch it if it
+          # is not, rather than paying `fetch-depth: 0` on every run.
+          git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null ||
+            git fetch --depth=1 origin "${BASE_SHA}"
+          SPECS=$(git diff --name-only "${BASE_SHA}" HEAD -- 'tests/e2e/acceptance*.spec.ts' | tr '\n' ' ')
+          echo "owned acceptance specs: ${SPECS:-<none>}"
+          echo "specs=${SPECS}" >> "$GITHUB_OUTPUT"
+
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm prisma generate
+      # The auth module reads BETTER_AUTH_SECRET, GOOGLE_CLIENT_ID, and
+      # GOOGLE_CLIENT_SECRET at import time. `pnpm prisma migrate deploy`
+      # creates the auth tables from prisma/migrations; without this the first
+      # sign-up POST hits an empty database and errors with "relation \"user\"
+      # does not exist".
+      - run: pnpm prisma migrate deploy
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm test:e2e:acceptance
+      # Publish ONLY the recordings whose spec this PR changed (MOTIR-1937 /
+      # MOTIR-1941). Publishing SUPERSEDES a story's current evidence and each
+      # recording targets its OWN declared story, so a run that published
+      # everything it recorded would replace receipts it has nothing to do with.
+      #
+      # `continue-on-error` so a publish problem never gates the merge.
+      # ⚠️ It also REWRITES THIS STEP'S CONCLUSION TO `success` — in the checks
+      # UI, in `gh pr checks`, and in the REST API — even when the uploader exits
+      # non-zero. So the step's own status can never be the signal: the uploader
+      # reports through the two channels the rewrite does NOT swallow, a
+      # `::error::` annotation and the job summary.
+      - name: Publish the acceptance video
+        if: success()
+        continue-on-error: true
+        uses: ./.github/actions/upload-acceptance-video
+        with:
+          pr-ref: ${{ github.head_ref }}
+          pr-title: ${{ github.event.pull_request.title }}
+          changed-specs: ${{ steps.owned-specs.outputs.specs }}
+          token: ${{ secrets.MOTIR_UPLOAD_TOKEN }}
+      # Always upload the report — a green run's is the only place the recorded
+      # video and trace survive for a reviewer to check by hand, and a red one is
+      # how the lane is debugged at all.
+      - name: Upload the acceptance Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-acceptance
+          path: out/playwright-report-acceptance
+          retention-days: 7
