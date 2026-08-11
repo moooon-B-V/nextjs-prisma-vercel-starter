@@ -104,6 +104,33 @@ The publish is opt-in and no-ops without one of:
 
 With neither present the job still records and checks; it just publishes nothing.
 
+## What turns the lane RED (MOTIR-2690)
+
+The publish step deliberately carries **no `continue-on-error`**, so its exit code
+is the signal. It fails on exactly one thing: **a story this PR owns ending the
+run without a published receipt** — a failed upload, or a clip of its own that is
+too unpaced to watch.
+
+It does **not** fail on either of the two cases the wrapper used to cover:
+
+- **No credential.** A fork PR gets neither OIDC nor the secret. The uploader logs
+  that publishing is opt-in and returns 0.
+- **A defect in a spec this run does not own.** An unwatchable _rehearsed_
+  recording is reported, annotated as a `warning`, and counted separately. The PR
+  that changes that spec is the one it fails.
+
+`continue-on-error` was there so a side effect could never gate a merge, and it
+did more than that: it rewrites the step's conclusion to `success` in the checks
+UI, in `gh pr checks`, **and** in the REST API. Measured in Motir's own CI, the
+publish failed on every run for three days — `Published 0 of 2`, two `##[error]`
+lines — while the lane reported `pass` each time, and two stories lost their
+receipt with nothing anywhere saying so. A check that cannot fail is worse than
+no check, because it actively reassures. Do not add it back.
+
+The `::error::` annotation and the job summary stay, so the reason lands on the
+run page rather than thousands of lines into the raw log. They are a second
+channel now, not the only one.
+
 ## Why the uploader is VENDORED here (the MOTIR-1941 decision)
 
 `scripts/upload-acceptance-video.mjs` and

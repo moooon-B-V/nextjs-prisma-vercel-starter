@@ -832,10 +832,16 @@ describe('main — one publish per recording (MOTIR-1734)', () => {
       expect(logged).toContain('rehearsed');
     });
 
-    it('still FAILS on an unwatchable clip it does not own — the floor is a PR-time check', async () => {
-      // Why the gate is applied AFTER the watchability assessment: pacing is a
-      // defect whoever is looking at this run can fix, and deferring the check to
-      // the owning run is the MOTIR-1905 blind spot.
+    it('REPORTS an unwatchable clip it does not own, and does NOT fail on it (MOTIR-2690)', async () => {
+      // The verdict MOTIR-1905 got right and MOTIR-2690 had to re-scope. Failing
+      // on ANY unwatchable clip cost nothing while the step ran under
+      // `continue-on-error` and could not go red whatever it returned. Now that
+      // it can, the same rule would red-light every acceptance PR over a spec it
+      // never touched — and in a STARTER that lands on every adopter, over a
+      // recording they did not make. A run answers for the specs it CHANGED; the
+      // rest it rehearses.
+      //
+      // Still assessed, still annotated, still counted — just not fatal here.
       const dir = tmpDir();
       writeRecording(dir, 'acceptance-raced-chromium', {
         storyKey: 'MOTIR-811',
@@ -854,10 +860,82 @@ describe('main — one publish per recording (MOTIR-1734)', () => {
 
       await main();
 
+      expect(exit).not.toHaveBeenCalled();
+      // A `warning`, not an `error`: the annotation's level now tracks whether
+      // the run fails on it, so an `::error::` beside a green step cannot recur.
+      expect(logSpy).toHaveBeenCalledWith(
+        expect.stringContaining('::warning::Unwatchable acceptance video for MOTIR-811'),
+      );
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it('FAILS on an unwatchable clip it DOES own — its own story lost its receipt', async () => {
+      // The other arm of the same rule: this PR changed the spec, so this PR's
+      // author is the one who can pace it, and this PR's lane is where it bites.
+      const dir = tmpDir();
+      writeRecording(dir, 'acceptance-raced-chromium', {
+        storyKey: 'MOTIR-811',
+        chapters: JSON.stringify([{ label: 'one', tSeconds: 0.5 }]),
+        totalSeconds: 9.5,
+      });
+      process.env['ACCEPTANCE_OUTPUT_DIR'] = dir;
+      process.env['GITHUB_ACTIONS'] = 'true';
+      const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      stubFetch();
+
+      await main();
+
       expect(exit).toHaveBeenCalledWith(1);
       expect(logSpy).toHaveBeenCalledWith(
         expect.stringContaining('::error::Unwatchable acceptance video for MOTIR-811'),
       );
+    });
+
+    it('counts a rehearsed unwatchable recording SEPARATELY from a failure (MOTIR-2690)', async () => {
+      // "1 publish failure(s) and 1 unwatchable recording(s)" pooled the two
+      // verdicts into one number, so the log could not say whose defect either
+      // was. They are now counted apart, and the rehearsed count is stated as
+      // not fatal.
+      const dir = tmpDir();
+      writeRecording(dir, 'acceptance-mine-chromium', { storyKey: 'MOTIR-1627' });
+      writeRecording(dir, 'acceptance-theirs-chromium', {
+        storyKey: 'MOTIR-811',
+        owned: false,
+        totalSeconds: 14.5, // just under the 15s floor
+      });
+      process.env['ACCEPTANCE_OUTPUT_DIR'] = dir;
+      const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      const fetchMock = stubFetch();
+
+      await main();
+
+      expect(publishedStories(fetchMock)).toEqual(['MOTIR-1627']);
+      expect(exit).not.toHaveBeenCalled();
+      expect(logSpy.mock.calls.flat().join('\n')).toContain(
+        '1 unwatchable recording(s) belong to specs this run does not own',
+      );
+    });
+
+    it('stays GREEN when the ONLY recording is an unwatchable one it does not own', async () => {
+      // The `publishable.length === 0` arm of the same rule — the shape that
+      // turns a fork PR, or any PR that touched one spec while the lane recorded
+      // another's, red for a defect it cannot fix.
+      const dir = tmpDir();
+      writeRecording(dir, 'acceptance-raced-chromium', {
+        storyKey: 'MOTIR-811',
+        owned: false,
+        chapters: JSON.stringify([{ label: 'one', tSeconds: 0.5 }]),
+        totalSeconds: 9.5,
+      });
+      process.env['ACCEPTANCE_OUTPUT_DIR'] = dir;
+      const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+      const fetchMock = stubFetch();
+
+      await main();
+
+      expect(exit).not.toHaveBeenCalled();
       expect(fetchMock).not.toHaveBeenCalled();
     });
 
@@ -871,6 +949,66 @@ describe('main — one publish per recording (MOTIR-1734)', () => {
       await main();
 
       expect(exit).not.toHaveBeenCalled();
+    });
+  });
+
+  // ── THE STEP CANNOT GO GREEN ON A LOST RECEIPT (MOTIR-2690) ────────────────
+  //
+  // The fail-open this card exists to close had two halves. The workflow half is
+  // asserted at the bottom of this file (the step no longer runs under
+  // `continue-on-error`); this is the script half — the exit code that is now
+  // the signal, and which was previously free to be anything.
+
+  describe('the exit verdict', () => {
+    it('THE GUARD CAN ACTUALLY FAIL — one owned recording that fails to publish exits non-zero', async () => {
+      const dir = tmpDir();
+      writeRecording(dir, 'acceptance-chromium', { storyKey: 'MOTIR-1627' });
+      process.env['ACCEPTANCE_OUTPUT_DIR'] = dir;
+      const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      stubFetch(() => ({ ok: false, status: 500 }));
+
+      await main();
+
+      expect(exit).toHaveBeenCalledWith(1);
+      // The exact line the broken lane printed under a `pass` check upstream.
+      expect(logSpy.mock.calls.flat().join('\n')).toContain(
+        'Published 0 of 1 owned acceptance recording(s)',
+      );
+      expect(console.error).toHaveBeenCalledWith(
+        expect.stringContaining('1 publish failure(s) and 0 unwatchable owned recording(s)'),
+      );
+    });
+
+    it('…and the SAME run exits ZERO when every owned recording publishes', async () => {
+      // The control arm: the assertion above is only evidence if the guard is
+      // capable of passing on the good case.
+      const dir = tmpDir();
+      writeRecording(dir, 'acceptance-chromium', { storyKey: 'MOTIR-1627' });
+      process.env['ACCEPTANCE_OUTPUT_DIR'] = dir;
+      const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+      stubFetch();
+
+      await main();
+
+      expect(exit).not.toHaveBeenCalled();
+    });
+
+    it('exits ZERO with no credential — BYOK is opt-in, and a fork PR must not go red', async () => {
+      // The FIRST of the two cases `continue-on-error` was covering for. A fork
+      // PR gets neither OIDC nor the secret; with the wrapper gone, this return
+      // is the only thing keeping the step green.
+      const dir = tmpDir();
+      writeRecording(dir, 'acceptance-chromium', { storyKey: 'MOTIR-1627' });
+      process.env['ACCEPTANCE_OUTPUT_DIR'] = dir;
+      delete process.env['MOTIR_UPLOAD_TOKEN'];
+      const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+      const fetchMock = stubFetch();
+
+      await main();
+
+      expect(exit).not.toHaveBeenCalled();
+      expect(fetchMock).not.toHaveBeenCalled();
     });
   });
 });
@@ -1006,5 +1144,46 @@ describe('assessWatchability (MOTIR-1772)', () => {
       meta: { totalSeconds: 600 },
     });
     expect(verdict.watchable).toBe(true);
+  });
+});
+
+// ── The lane itself ─────────────────────────────────────────────────────────
+//
+// A workflow file is not typechecked, linted or executed by any suite, so the
+// property that makes this lane HONEST is asserted here or nowhere. The same
+// shape `tests/design-assets-uploader.test.ts` uses for the design-result lane.
+
+describe('the acceptance-video lane', () => {
+  const wf = fs.readFileSync(
+    path.join(process.cwd(), '.github/workflows/acceptance-video.yml'),
+    'utf8',
+  );
+  const code = wf
+    .split('\n')
+    .filter((l) => !/^\s*#/.test(l))
+    .join('\n');
+
+  it('carries NO `continue-on-error` — a lost receipt must be able to go red (MOTIR-2690)', () => {
+    // The whole card. `continue-on-error` rewrites the step's conclusion to
+    // `success` — in the checks UI, in `gh pr checks`, AND in the REST API — so
+    // the uploader's exit code stopped being a signal at all. Measured upstream
+    // (MOTIR-2499): from 2026-08-07 the publish failed on every run while the
+    // lane reported `pass`, and two stories lost their receipt silently.
+    //
+    // Do not re-add it as a kindness. The two cases it was protecting are
+    // handled inside the uploader, and both are asserted above: `exits ZERO
+    // with no credential` and `REPORTS an unwatchable clip it does not own`.
+    expect(code).not.toContain('continue-on-error');
+  });
+
+  it('still publishes only on a green run, and only what this PR owns', () => {
+    // The removal above must not have widened WHAT the step does — the `if:` and
+    // the owned-spec input are what keep an unrelated story's receipt intact.
+    expect(code).toMatch(/name: Publish the acceptance video\n\s*if: success\(\)/);
+    expect(code).toContain('changed-specs: ${{ steps.owned-specs.outputs.specs }}');
+  });
+
+  it('requests `id-token: write`, or the keyless publish cannot authenticate', () => {
+    expect(code).toMatch(/permissions:[\s\S]*id-token:\s*write/);
   });
 });
