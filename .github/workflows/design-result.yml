@@ -1,0 +1,84 @@
+name: Design result
+
+# ── The design-result lane, paths-scoped (MOTIR-2664 / MOTIR-2673) ───────────
+#
+# Publishes a design subtask's RESULT — the changed `design-notes.md` section,
+# the `*.mock.html` page/view mock and the `.png` export — to its work item in
+# Motir, where a reviewer reads it on the card instead of opening raw files on
+# GitHub. See `design/README.md` for the authoring guide and the publish
+# contract.
+#
+# ⚠️ WHY ITS OWN WORKFLOW HERE, WHEN UPSTREAM IT IS A STEP IN AN EXISTING JOB.
+# In motir-core the publish is a step in `ci.yml`'s `design-guards` job, which
+# already runs on every PR and already exists to read `design/**` — so it adds
+# no new check. This repository has no such job, and the requirement is the same
+# one the acceptance lane learned the hard way: a PR that touches no design asset
+# must show NO design check at all. A job-level `if:` does NOT achieve that — a
+# job whose `if:` is false is still REPORTED, as a greyed `Skipped` (measured on
+# PR #8, MOTIR-1958). The only mechanism that leaves nothing behind is a workflow
+# that is never TRIGGERED, hence a separate file with a `paths:` filter.
+#
+# ⚠️ NO `push:` TRIGGER. `main` never runs the lane. The PR published the result
+# while the design was in review; re-publishing after merge would only supersede
+# it with an identical set.
+#
+# ⚠️ NO `continue-on-error` ON THE PUBLISH STEP — do not add one. It rewrites a
+# failing step's conclusion to `success` on the checks UI, in `gh pr checks` AND
+# in the REST API, so a publish can fail silently for as long as nobody looks.
+# Upstream that cost days of green runs that published nothing (MOTIR-2499). The
+# two cases that would justify it are handled INSIDE the script, which returns 0
+# for each:
+#   • NO CREDENTIAL — a fork PR gets neither OIDC nor the secret. Publishing is
+#     opt-in, and a fork must not fail the build.
+#   • NO RESOLVABLE TARGET CARD — the branch and PR title carry no `<KEY>-<n>`.
+#     There is deliberately no fallback: a design attached to the WRONG card
+#     makes another card look designed when it is not.
+# What is left for red to mean is a publish that should have happened and did not.
+on:
+  pull_request:
+    paths:
+      - 'design/**'
+      # The lane's own definition is a trigger too: a PR that restructures the
+      # lane changes no design asset, and would otherwise ship unexecuted.
+      - '.github/workflows/design-result.yml'
+      - 'scripts/upload-design-assets.mjs'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    name: Publish the design result
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Keyless publish: the script authenticates off this job's GitHub Actions
+      # OIDC identity, so a project connected to Motir via the GitHub App needs
+      # no token minted or stored. GitHub denies OIDC to fork PRs, where the
+      # script falls back to the secret below and then no-ops if it is unset.
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # The publisher is dependency-free (node: built-ins + global fetch), so
+      # this lane needs no install, no Prisma client and no database — which is
+      # what keeps it a few seconds rather than a second CI build.
+      - name: Publish the design result
+        env:
+          MOTIR_UPLOAD_TOKEN: ${{ secrets.MOTIR_UPLOAD_TOKEN }}
+          MOTIR_BASE_URL: ${{ vars.MOTIR_BASE_URL || 'https://app.motir.co' }}
+          DESIGN_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          DESIGN_PR_REF: ${{ github.head_ref }}
+          DESIGN_PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          set -euo pipefail
+          # A pull_request checkout is the MERGE commit at depth 1, which carries
+          # both parents — so the base is normally already present. Fetch it if it
+          # is not, rather than paying `fetch-depth: 0` on every run.
+          git cat-file -e "${DESIGN_BASE_SHA}^{commit}" 2>/dev/null ||
+            git fetch --depth=1 origin "${DESIGN_BASE_SHA}"
+          node scripts/upload-design-assets.mjs

@@ -194,12 +194,15 @@ prisma/       Prisma schema + migrations. Edit `schema.prisma`, run
 tests/        Vitest integration tests (real Postgres) + Playwright E2E
               specs in `tests/e2e/`. See `playwright.config.ts` and
               `vitest.config.ts`.
+design/       Design assets — three files per surface, published to the work
+              item by `design-result.yml`. See `design/README.md`.
 docs/         Project docs.
 scripts/      Dev scripts. `db-up.sh` brings up Docker Postgres + migrations.
 public/       Static assets.
 .github/
   workflows/  CI definitions: `ci.yml` (lint, typecheck, unit, build, e2e),
               `acceptance-video.yml` (paths-filtered story-acceptance lane),
+              `design-result.yml` (paths-filtered design-result lane),
               and the preview-database cleanup.
 ```
 
@@ -221,6 +224,28 @@ Jobs:
   red build)
   The Husky pre-commit hook catches lint/format issues before they reach CI;
   CI is the backstop. Total runtime targets <5 min on a fresh clone.
+
+### The design-result lane — its own paths-filtered workflow
+
+[`.github/workflows/design-result.yml`](.github/workflows/design-result.yml)
+publishes a design task's result — the changed `design-notes.md` section, the
+`*.mock.html` mock and the `.png` export — to its work item in Motir, where a
+reviewer reads it on the card instead of opening raw files on GitHub. It is
+**opt-in by touching a design asset**, enforced the same way the acceptance lane
+enforces its own opt-in — by the trigger, not by a job-level `if:`:
+
+```yaml
+on:
+  pull_request:
+    paths:
+      - 'design/**'
+```
+
+The target card comes from the branch name (`design/<KEY>-<n>-slug`), then the
+PR title. There is no fallback: with no key it logs what it would have published
+and exits 0. Auth is keyless GitHub OIDC, with a `MOTIR_UPLOAD_TOKEN` secret as
+the fallback; with neither, publishing is skipped and your build still passes.
+`design/README.md` is the authoring guide.
 
 ### The acceptance-video lane — its own paths-filtered workflow
 
