@@ -467,18 +467,21 @@ function ciRunUrl() {
     : null;
 }
 
-// ── CI VISIBILITY (MOTIR-1905) ───────────────────────────────────────────────
+// ── CI VISIBILITY (MOTIR-1905, re-scoped by MOTIR-2690) ──────────────────────
 //
-// The publish step runs under `continue-on-error: true` so a side-effect can
-// never gate a merge — the right call, with one consequence nobody priced in:
-// GitHub rewrites the step's `conclusion` to `success`, so `gh pr checks`, the
-// checks UI, AND the REST API all report green even on exit 1. The raw job log
-// was the only witness, which is how a completely broken acceptance gate went
-// unnoticed from the day the watchability floor shipped.
+// The publish step USED to run under `continue-on-error: true` so a side-effect
+// could never gate a merge — with one consequence nobody priced in: GitHub
+// rewrites the step's `conclusion` to `success`, so `gh pr checks`, the checks
+// UI, AND the REST API all report green even on exit 1. The raw job log was the
+// only witness, which is how a completely broken acceptance gate went unnoticed
+// from the day the watchability floor shipped.
 //
-// So the script reports through the two channels `continue-on-error` does NOT
-// swallow: a workflow ANNOTATION (surfaced on the run and the PR's Files tab)
-// and the job SUMMARY (rendered on the run page). Both are no-ops off CI.
+// The wrapper is GONE (MOTIR-2690 here, MOTIR-2499 upstream), so this script's
+// EXIT CODE is now the signal. The two channels below stay — a workflow
+// ANNOTATION (surfaced on the run and the PR's Files tab) and the job SUMMARY
+// (rendered on the run page) — because they put the reason on the run page
+// instead of thousands of lines into the raw log. They are now a SECOND channel
+// rather than the only one. Both are no-ops off CI.
 
 /** Emit a GitHub workflow annotation. Newlines are escaped — a raw one would
  *  truncate the command and swallow the rest of the message. */
@@ -557,8 +560,13 @@ export async function main() {
   // always used for a failed upload: report it, keep going for the others, and
   // exit non-zero at the end so the run is never silently green. The gate is not
   // weakened: an unwatchable clip is still never published, and the step still
-  // fails.
+  // fails — for the specs this run OWNS. Which ones those are is the
+  // whose-defect-is-it question MOTIR-2690 answers, just below.
   ciSummary('### Acceptance videos\n');
+  // OWNERSHIP (MOTIR-1937) is resolved HERE, ahead of the verdicts, because
+  // MOTIR-2690 made it decide more than what gets WRITTEN — it now decides what
+  // this run FAILS on. See the exit verdict at the bottom of this function.
+  const ownedSpecs = resolveOwnedSpecs();
   const assessed = targets.map((t) => {
     // Read the meta ONCE — the watchability verdict and the MOTIR-1937 ownership
     // gate both key off it (`totalSeconds` and `specFile` respectively).
@@ -566,30 +574,57 @@ export async function main() {
     return {
       ...t,
       meta,
+      owned: isOwnedRecording(meta, ownedSpecs),
       verdict: assessWatchability({ chapters: readChapters(t.recording.chapters), meta }),
     };
   });
   const unwatchable = assessed.filter((t) => !t.verdict.watchable);
   const publishable = assessed.filter((t) => t.verdict.watchable);
+  // ── WHOSE DEFECT IS IT? (MOTIR-2690) ──────────────────────────────────────
+  //
+  // MOTIR-1905 failed the run on ANY unwatchable clip, owned or not, reasoning
+  // that pacing is a defect whoever is looking at the run can fix. That was free
+  // advice while the step ran under `continue-on-error` and could not go red
+  // whatever it returned. Now that it CAN (the wrapper was removed with this
+  // change, so a lost receipt is finally visible), the same rule would red-light
+  // every acceptance PR for a defect in a spec it never touched — and in a
+  // STARTER, that lands on every adopter, on a recording they did not make.
+  //
+  // So: an unwatchable OWNED recording is fatal (this PR's own story just lost
+  // its receipt, and this PR's author can fix it); an unwatchable REHEARSED one
+  // is reported, annotated as a warning, and counted separately.
+  const unwatchableOwned = unwatchable.filter((t) => t.owned);
+  const unwatchableRehearsed = unwatchable.filter((t) => !t.owned);
 
-  for (const { storyKey, recording, verdict } of unwatchable) {
+  for (const { storyKey, recording, verdict, owned: isOwned } of unwatchable) {
+    const consequence = isOwned
+      ? 'This run OWNS its spec, so the step fails.'
+      : 'This run does not own its spec — it is reported here and counted separately, and the ' +
+        'PR that changes that spec is the one it fails.';
     const message =
       `Acceptance video for ${storyKey} (${path.basename(recording.dir)}) is NOT watchable: ${verdict.reason}. ` +
-      'It was NOT published; the other recordings in this run were unaffected. ' +
+      `It was NOT published; the other recordings in this run were unaffected. ${consequence} ` +
       'Pace the recorded happy path: wrap each phase in `chapter(...)` (which paces itself) and ' +
       '`await beat()` after each user-visible action, both in tests/e2e/_helpers/acceptance-video.ts. ' +
       'Do NOT fix this by lowering the floor.';
     console.error(message);
-    // A CI ANNOTATION, so the failure is visible on the run without opening the
-    // raw job log (MOTIR-1905). `continue-on-error` rewrites the step's
-    // conclusion to `success`, which is why the log was the only witness.
-    ciAnnotate('error', `Unwatchable acceptance video for ${storyKey}: ${verdict.reason}`);
-    ciSummary(`- ❌ **${storyKey}** — not published: ${verdict.reason}`);
+    // A CI ANNOTATION, so the verdict is visible on the run without opening the
+    // raw job log (MOTIR-1905). Its LEVEL now tracks the consequence: `error`
+    // for a defect this run fails on, `warning` for one it is only reporting —
+    // an `::error::` beside a green step is the ambiguity MOTIR-2690 removes.
+    ciAnnotate(
+      isOwned ? 'error' : 'warning',
+      `Unwatchable acceptance video for ${storyKey}: ${verdict.reason}`,
+    );
+    ciSummary(`- ${isOwned ? '❌' : '⚠️'} **${storyKey}** — not published: ${verdict.reason}`);
   }
 
   if (publishable.length === 0) {
     console.error('No watchable acceptance recording in this run — nothing to publish.');
-    process.exit(1);
+    // Only the OWNED ones are this run's to answer for (see above); a lane whose
+    // single unwatchable clip belongs to another PR's spec stays green.
+    if (unwatchableOwned.length > 0) process.exit(1);
+    return;
   }
 
   console.log(`Acceptance publish targets (${publishable.length}):`);
@@ -615,9 +650,8 @@ export async function main() {
   // the WRITE is scoped. Skipping the work entirely for un-owned recordings would
   // move those checks to whichever run does own them, which is how a broken
   // acceptance gate stayed invisible for days (MOTIR-1905).
-  const ownedSpecs = resolveOwnedSpecs();
-  const owned = publishable.filter((t) => isOwnedRecording(t.meta, ownedSpecs));
-  const rehearsed = publishable.filter((t) => !owned.includes(t));
+  const owned = publishable.filter((t) => t.owned);
+  const rehearsed = publishable.filter((t) => !t.owned);
 
   for (const { storyKey, recording, meta } of rehearsed) {
     console.log(
@@ -637,11 +671,12 @@ export async function main() {
         `this run changed (${ownedSpecs.size} owned spec(s)). A story's receipt is written by the ` +
         'PR that changes its acceptance spec, so an unrelated run never supersedes it.',
     );
-    // An unwatchable clip is still a defect worth failing on — the author of a
-    // pacing regression is whoever is looking at this run.
-    if (unwatchable.length > 0) {
+    // An unwatchable clip this run OWNS is still a defect worth failing on. One
+    // it merely rehearsed is not (MOTIR-2690) — see the whose-defect-is-it note
+    // above.
+    if (unwatchableOwned.length > 0) {
       console.error(
-        `${unwatchable.length} unwatchable recording(s) out of ${targets.length} — reported above.`,
+        `${unwatchableOwned.length} unwatchable owned recording(s) out of ${targets.length} — reported above.`,
       );
       process.exit(1);
     }
@@ -717,12 +752,29 @@ export async function main() {
     `Published ${owned.length - failed} of ${owned.length} owned acceptance recording(s) ` +
       `(${targets.length} recorded in this run).`,
   );
-  // Non-zero on EITHER kind of problem — an unwatchable clip is as much a broken
-  // acceptance gate as a failed upload, and both must survive `continue-on-error`
-  // as a visible annotation rather than a green step (MOTIR-1905).
-  if (failed > 0 || unwatchable.length > 0) {
+  if (unwatchableRehearsed.length > 0) {
+    console.log(
+      `${unwatchableRehearsed.length} unwatchable recording(s) belong to specs this run does not ` +
+        'own — reported above, and NOT counted as failures of this run.',
+    );
+  }
+  // THE EXIT VERDICT. Non-zero on either kind of problem this run is answerable
+  // for — a failed upload, or a clip of its OWN that was unwatchable; both mean
+  // a story this PR owns has no receipt (MOTIR-1905 / MOTIR-2690). Deliberately
+  // NOT in here: an unwatchable REHEARSED recording (another PR's defect;
+  // counted separately just above, so it is visible without being inherited).
+  //
+  // ⚠️ THIS EXIT CODE IS NOW THE SIGNAL. The workflow step no longer runs under
+  // `continue-on-error`, which used to rewrite its conclusion to `success` and
+  // left the annotations and the raw log as the only witnesses — the fail-open
+  // that let "Published 0 of 2" pass for three days upstream (MOTIR-2499).
+  if (failed > 0 || unwatchableOwned.length > 0) {
     console.error(
-      `${failed} publish failure(s) and ${unwatchable.length} unwatchable recording(s) out of ${targets.length}.`,
+      `${failed} publish failure(s) and ${unwatchableOwned.length} unwatchable owned ` +
+        `recording(s) out of ${targets.length}` +
+        (unwatchableRehearsed.length > 0
+          ? ` (plus ${unwatchableRehearsed.length} unwatchable rehearsed recording(s), not fatal).`
+          : '.'),
     );
     process.exit(1);
   }

@@ -140,15 +140,33 @@ jobs:
       # recording targets its OWN declared story, so a run that published
       # everything it recorded would replace receipts it has nothing to do with.
       #
-      # `continue-on-error` so a publish problem never gates the merge.
-      # ⚠️ It also REWRITES THIS STEP'S CONCLUSION TO `success` — in the checks
-      # UI, in `gh pr checks`, and in the REST API — even when the uploader exits
-      # non-zero. So the step's own status can never be the signal: the uploader
-      # reports through the two channels the rewrite does NOT swallow, a
-      # `::error::` annotation and the job summary.
+      # ⚠️ NO `continue-on-error` HERE — REMOVED BY MOTIR-2690, DO NOT PUT IT BACK.
+      #
+      # It rewrote this step's conclusion to `success` — on the checks UI, in
+      # `gh pr checks`, AND in the REST API — even when the uploader exited 1.
+      # The measured cost, upstream in motir-core where this lane was vendored
+      # from (MOTIR-2499): from 2026-08-07 the publish failed on every run
+      # ("Published 0 of 2", two `##[error]` lines), the lane reported `pass`
+      # each time, and two stories lost their receipt with nothing anywhere
+      # saying so. A check that cannot fail is worse than no check, because it
+      # actively reassures — nobody re-reads the log of a passing step.
+      #
+      # It was there so a side-effect could never gate a merge. Both cases that
+      # justified it are handled INSIDE the uploader, which returns 0 for each —
+      # so removing the wrapper costs nothing it was actually buying:
+      #   • NO CREDENTIAL (a fork PR gets neither OIDC nor the secret) — the
+      #     script logs "BYOK is opt-in" and returns.
+      #   • A DEFECT IN A SPEC THIS RUN DOES NOT OWN — an unwatchable REHEARSED
+      #     recording is reported, annotated as a `warning`, and counted
+      #     separately; only the specs this PR changed can fail it.
+      # What DOES fail the step is exactly what should: a story this PR owns
+      # ending the run without a published receipt.
+      #
+      # The `::error::` ANNOTATION and the job SUMMARY (MOTIR-1905) stay — they
+      # put the reason on the run page instead of thousands of lines into the
+      # raw log. They are now a second channel rather than the only one.
       - name: Publish the acceptance video
         if: success()
-        continue-on-error: true
         uses: ./.github/actions/upload-acceptance-video
         with:
           pr-ref: ${{ github.head_ref }}
