@@ -47,6 +47,33 @@ Run it locally with `pnpm test:e2e:acceptance`. It uses its own Playwright confi
 (`playwright.acceptance.config.ts`, port 3200) so it can run alongside the main
 suite, and the main suite `testIgnore`s `acceptance*.spec.ts` so nothing runs twice.
 
+### Retiring a spec — an empty lane is the normal state
+
+An acceptance spec has a **lifecycle**, and it is not "written once and kept
+forever". It enters the lane when its story goes into review, records the clip
+the reviewer watches, and then **leaves** once that story is approved — either
+_promoted_ into the main Playwright lane (rename it out of `acceptance*.spec.ts`,
+so the behaviour keeps being regression-tested every PR without re-recording a
+receipt nobody will watch again) or _retired_ (deleted, when the main lane
+already covers it).
+
+So the lane's membership is roughly "the stories currently in review", and its
+correct size is frequently **zero** — including on a fresh project, which starts
+there. Two consequences worth knowing before they surprise you:
+
+- **The PR that retires the last spec is a normal, green PR.** A deletion matches
+  the workflow's `paths:` filter exactly as an edit does, so that PR _does_ run
+  the lane, and the lane then collects nothing. `pnpm test:e2e:acceptance`
+  therefore carries **`--pass-with-no-tests`**: without it Playwright exits 1 on
+  `No tests found` and the one PR that ends a receipt's life reports a red check
+  on a diff that deletes a test — the most misreadable signal CI can give, whose
+  obvious remedy is to put the spec back and keep every approved story's spec in
+  the lane forever (MOTIR-2927). Do not remove the flag as a papered-over
+  misconfiguration; an empty lane here is a legitimate state, not a broken one.
+- **An empty lane still fails when a spec fails.** `--pass-with-no-tests` only
+  changes the verdict on _zero collected tests_. One collected failing test is a
+  red lane exactly as before.
+
 ## What CI does
 
 | Run                                              | Records + checks           | Publishes          |

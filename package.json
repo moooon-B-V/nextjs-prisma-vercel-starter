@@ -20,7 +20,8 @@
     "test:watch": "vitest",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
-    "test:e2e:acceptance": "playwright test --config playwright.acceptance.config.ts",
+    "//test:e2e:acceptance": "--pass-with-no-tests is load-bearing, not papered-over: a receipt LEAVES this lane once its story is approved, so an empty lane is a legitimate steady state here and Playwright's default (exit 1 on 'No tests found') would red-light the PR that retires the last spec. See docs/acceptance-video.md.",
+    "test:e2e:acceptance": "playwright test --config playwright.acceptance.config.ts --pass-with-no-tests",
     "prepare": "husky",
     "postinstall": "prisma generate"
   },
