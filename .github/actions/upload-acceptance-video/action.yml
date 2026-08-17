@@ -23,14 +23,14 @@ inputs:
   pr-ref:
     description: >
       The PR head ref (branch) carrying the `MOTIR-<id>` — pass
-      `${{ github.head_ref }}`. Used only when `story-key` is empty and the
+      `github.head_ref`. Used only when `story-key` is empty and the
       recording did not self-declare a story.
     required: false
     default: ''
   pr-title:
     description: >
       The PR title carrying the `MOTIR-<id>` (the status-sync convention) — pass
-      `${{ github.event.pull_request.title }}`. Parsed when `pr-ref` has no key.
+      `github.event.pull_request.title`. Parsed when `pr-ref` has no key.
     required: false
     default: ''
   fallback-story-key:
