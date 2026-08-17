@@ -108,16 +108,28 @@ With neither present the job still records and checks; it just publishes nothing
 
 The publish step deliberately carries **no `continue-on-error`**, so its exit code
 is the signal. It fails on exactly one thing: **a story this PR owns ending the
-run without a published receipt** — a failed upload, or a clip of its own that is
-too unpaced to watch.
+run without a published receipt** — a failed upload, a clip of its own that is
+too unpaced to watch, or a video of its own too large for the publish target.
 
-It does **not** fail on either of the two cases the wrapper used to cover:
+It does **not** fail on any of these:
 
 - **No credential.** A fork PR gets neither OIDC nor the secret. The uploader logs
   that publishing is opt-in and returns 0.
-- **A defect in a spec this run does not own.** An unwatchable _rehearsed_
-  recording is reported, annotated as a `warning`, and counted separately. The PR
-  that changes that spec is the one it fails.
+- **A defect in a spec this run does not own.** An unwatchable or over-limit
+  _rehearsed_ recording is reported, annotated as a `warning`, and counted
+  separately. The PR that changes that spec is the one it fails.
+- **An over-limit TRACE** (MOTIR-1911). The video _is_ the receipt; a debugging
+  aid must not cost a story its evidence. The trace is dropped with a warning and
+  the video publishes without it. An over-limit **video** is the fatal half.
+- **A story that has already been accepted** (MOTIR-2768). The server refuses to
+  supersede an approved receipt, and the uploader reports that as a `notice` and
+  a `⏭️` summary line rather than a failure — once a backlog of accepted stories
+  builds up it is the commonest answer the loop gets.
+
+The per-file cap the size gate measures against defaults to 100 MB. **Set the
+action's `max-artifact-bytes` to `10485760` if you self-host Motir** — off-cloud
+the server's real cap is the 10 MB baseline, and left at the default the gate
+waves through artifacts the store will reject.
 
 `continue-on-error` was there so a side effect could never gate a merge, and it
 did more than that: it rewrites the step's conclusion to `success` in the checks
@@ -156,6 +168,30 @@ bugs, and this copy will not receive the next one automatically. Two mitigations
 `tests/acceptance-video-uploader.test.ts` is vendored alongside it, so the
 behaviour is pinned here and a bad sync fails locally; and when the Action becomes
 remotely invocable, this repo should switch to referencing it and delete the copy.
+
+### Keeping the copy in sync (MOTIR-2693)
+
+That rent came due once already. Between 2026-07-24 and 2026-08-11 this copy fell
+four upstream cards behind, and one of them had changed the WIRE: MOTIR-2389 moved
+the blob store to S3, so `/upload-token` returns a presigned PUT URL and the copy
+was still handing it to `@vercel/blob`'s `put` as a token. Nothing was red, because
+this repo owns no acceptance spec and the lane's `paths:` filter never fires it —
+the first person to hit it would have been whoever wrote the first acceptance spec,
+and what they would have seen is `Failed to parse URL from <a long opaque string>`
+thrown from inside a third-party SDK.
+
+So the three vendored files carry a **SYNC POINT** comment naming the motir-core
+commit they were copied from, and the body below it is upstream **verbatim**:
+
+| file                                                 | local edits                                                                                                                                                                                                       |
+| ---------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `scripts/upload-acceptance-video.mjs`                | the header only                                                                                                                                                                                                   |
+| `.github/actions/upload-acceptance-video/action.yml` | the banner only                                                                                                                                                                                                   |
+| `tests/acceptance-video-uploader.test.ts`            | the header, one commented divergence (`ALREADY_APPROVED_CODE` cannot be pinned to a motir-core class this repo does not have), and the `the acceptance-video lane` block, which asserts on _this_ repo's workflow |
+
+Re-syncing is then `git -C motir-core show <ref>:<path>`, re-apply the header,
+re-read the table. Every local edit you add outside that table is a hunk the next
+sync has to adjudicate — prefer fixing it upstream and re-copying.
 
 Upstream: `motir-core/docs/e2e/acceptance-video-byok.md` (the consumer contract)
 and `motir-core/docs/decisions/acceptance-video.md` (the policy).
