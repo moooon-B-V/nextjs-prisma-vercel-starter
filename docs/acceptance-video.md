@@ -49,11 +49,12 @@ suite, and the main suite `testIgnore`s `acceptance*.spec.ts` so nothing runs tw
 
 ## What CI does
 
-| Run                                              | Records + checks  | Publishes          |
-| ------------------------------------------------ | ----------------- | ------------------ |
-| PR that changes `tests/e2e/acceptance-X.spec.ts` | yes               | **only X's story** |
-| PR that changes no acceptance spec               | **no run at all** | nothing            |
-| Push to the default branch                       | no run at all     | nothing            |
+| Run                                              | Records + checks           | Publishes          |
+| ------------------------------------------------ | -------------------------- | ------------------ |
+| PR that changes `tests/e2e/acceptance-X.spec.ts` | yes                        | **only X's story** |
+| PR that changes no acceptance spec               | **no run at all**          | nothing            |
+| Push to the default branch, lane holds ≥ 1 spec  | yes — the **baseline**     | **nothing, ever**  |
+| Push to the default branch, lane is empty        | no — gate job only (~10 s) | nothing            |
 
 Two properties make that scoping necessary rather than tidy:
 
@@ -73,6 +74,51 @@ changed. The workflow recomputes that list itself (`git diff --name-only` agains
 the PR base) and passes it to the uploader, which **fails closed** — an empty
 list owns nothing.
 
+### The default-branch baseline
+
+That `paths:` filter is deliberately blind to your **app**. An acceptance spec
+drives a real product surface, so the filter cuts straight between a page and the
+only test that reads it: change the page, and the lane does not run. Widening the
+filter is not the answer — the set of sources these specs read is most of your
+app, so any honest widening runs the whole lane on nearly every PR, usually to
+execute nothing at all.
+
+So the lane **also runs on a push to the default branch**, which is why the table
+above has two rows for it. Without that, a change that breaks an acceptance spec
+merges green and then sits there until some unrelated PR happens to touch a spec
+— and that PR's author inherits the diagnosis of somebody else's change. The
+baseline puts the red on the merge that caused it.
+
+Three properties keep that affordable and safe, and all three are asserted in
+`tests/acceptance-video-uploader.test.ts`:
+
+- **It is gated on the lane holding a spec.** A full run installs pnpm, generates
+  a Prisma client, migrates a Postgres, downloads a Chromium and boots a dev
+  server; the cost is the setup, not the specs, so an ungated trigger would pay
+  it on every merge to run zero tests. A fresh project's lane is empty until
+  someone writes the first acceptance spec, so that is the common case, not the
+  edge case. The `membership` job is a checkout and a `find` — seconds — and the
+  rest of the lane only starts if it finds something.
+- **The baseline never publishes.** Two independent mechanisms, because
+  publishing supersedes: the publish step only runs for a `pull_request` event,
+  and the owned-specs step emits an empty list on a push (there is no base ref to
+  diff against), which the uploader fails closed on. A baseline run _rehearses_ —
+  it records and checks the clips and writes none of them anywhere.
+- **Superseded runs are cancelled on PRs only.** On a PR only the tip matters. On
+  the default branch, back-to-back merges would cancel each other's baseline and
+  leave exactly the "which merge broke it?" ambiguity the baseline removes.
+
+This does not weaken the no-check-at-all requirement below. That requirement is
+about **pull requests**; a `push` event attaches its checks to the commit on the
+default branch and adds nothing to any open PR, so the gate can skip freely there
+and cost no PR a check. For a `pull_request` event the gate answers `true`
+unconditionally — the `paths:` filter has already decided.
+
+What is still **not** covered, said plainly: the PR that breaks a spec goes green.
+The baseline catches it one merge later, not before it lands. The accepted cost is
+a red default branch for the length of one fix — bounded, attributed, and paid by
+the author who caused it rather than by the next passer-by.
+
 **Why a whole workflow, and not a job with an `if:`?** Because the requirement is
 that a PR owning no acceptance spec shows no acceptance check _at all_, and a
 job-level `if:` does not deliver that: a job whose `if:` is false is still
@@ -91,7 +137,9 @@ no longer waits for a green build, and its `env:` block is a copy of `ci.yml`'s
 flow. Motir's approve action moves a story `in_review → done`, and `in_review` is
 the **PR-open** state — merging is what flips the card to `done`. Publish only
 after merge and the receipt lands once the story is already done, so the reviewer
-never gets to watch-then-approve.
+never gets to watch-then-approve. This is why the baseline above **runs** the
+lane on the default branch but never **publishes** from it: the two questions are
+separate, and only the first one has changed.
 
 ## Publishing credentials
 

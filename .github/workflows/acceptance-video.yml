@@ -29,25 +29,177 @@ name: Acceptance video
 #     check being absent, and it is only paid on the PRs that own a spec.
 #   • Workflows cannot share an `env:` block, so the block below is a deliberate
 #     copy of ci.yml's `e2e` job. CHANGE BOTH TOGETHER.
-#   • There is no `push:` trigger. `main` never runs the lane, which is already
-#     the decision: the PR published the receipt while its story was in review,
-#     and re-publishing post-merge would only supersede it with an identical clip
-#     (docs/acceptance-video.md).
+#   • ⚠️ A CHANGE TO A PAGE AN ACCEPTANCE SPEC READS DOES NOT RUN THIS LANE on a
+#     pull request, and that is deliberate. An acceptance spec drives a real
+#     product surface, so the `paths:` filter cuts between a page and the only
+#     test that reads it. Widening the filter to the sources those specs assert
+#     against is not on the table: that set is most of your app, so any honest
+#     widening runs this whole lane on nearly every PR — to execute nothing at
+#     all while your lane is empty, which is its normal state.
+#     THIS LANE IS THE RECEIPT LANE, NOT A REGRESSION GATE. Behaviour a page owes
+#     on every PR belongs in the main Playwright lane, which ci.yml already runs
+#     unconditionally; an acceptance spec is what a REVIEWER WATCHES. So if you
+#     change a surface an acceptance spec drives, either run the lane yourself
+#     (`pnpm test:e2e:acceptance`) before merging, or expect the DEFAULT-BRANCH
+#     BASELINE below to find it on your merge.
+#
+# ── THE DEFAULT-BRANCH BASELINE — `push: main`, gated on the lane holding a spec ──
+#
+# WHAT RUNS WHEN, in full — this table is the whole trigger policy:
+#
+#   PR changing an `acceptance*.spec.ts`   lane runs · PUBLISHES that spec's story
+#   PR changing anything else              NO RUN, NO CHECK
+#   push to `main`, lane HAS ≥1 spec       lane runs · NEVER publishes
+#   push to `main`, lane is EMPTY          membership gate only (~10s), nothing else
+#
+# THE PROBLEM IT CLOSES. The `pull_request` filter is deliberately blind to your
+# app (the bullet above), so a change that breaks an acceptance spec merges green
+# and then sits on the default branch until some UNRELATED pull request happens
+# to touch a spec — and that PR's author inherits a diagnosis of somebody else's
+# change. The baseline puts the red on the merge that caused it instead.
+#
+# WHY THE GATE IS THE LOAD-BEARING PART, and not a nicety. A full run of this
+# lane installs pnpm, generates a Prisma client, migrates a Postgres, downloads a
+# Chromium and boots a dev server — the cost is the setup, not the specs, so it
+# is paid in full even when the lane holds nothing. A template repository's lane
+# holds nothing until its first acceptance spec is written, and every project
+# scaffolded from it starts there too. An UNGATED `push:` trigger would therefore
+# spend that setup on every single merge, forever, to run zero tests. Gated, an
+# empty lane costs one checkout per merge and the real cost is paid only inside
+# the window where a story is actually in review.
+#
+# ⚠️ THE "NO CHECK AT ALL" REQUIREMENT IS UNTOUCHED, and it is worth saying why,
+# because the gate LOOKS like the job-level `if:` that requirement forbids.
+# "Absent, not skipped" is a constraint about PULL REQUESTS — a greyed check on
+# somebody's PR. A `push` event attaches its checks to the commit on the default
+# branch; it adds nothing to any open pull request. So the gate can skip freely
+# on `push` and cost no PR a check. On `pull_request` the gate answers `true`
+# unconditionally — the `paths:` filter has already decided, and a triggered PR
+# run is never skipped. If you ever make that answer conditional on something a
+# pull request can see, you have reintroduced the greyed check.
+#
+# ⚠️ THE BASELINE TESTS; IT NEVER PUBLISHES. Two independent mechanisms, because
+# publishing SUPERSEDES a story's evidence and one guard is not enough for that:
+# the publish step is gated to `pull_request` events, AND the owned-specs step
+# emits an EMPTY list on `push` (there is no base ref to diff against), which the
+# uploader already fails closed on. A baseline run therefore REHEARSES — it
+# records and checks the clips and writes none of them anywhere. This preserves
+# the original reason there was no `push:` trigger at all: the receipt belongs to
+# the moment the story was in review, and re-publishing after the merge would
+# only supersede it with an identical clip (docs/acceptance-video.md).
+#
+# ⚠️ AND CANCELLING SUPERSEDED RUNS IS PULL-REQUEST-ONLY. On a PR only the tip
+# matters, so cancelling saves minutes. On the default branch it is wrong:
+# back-to-back merges would cancel each other's baseline and destroy the
+# per-merge attribution that is this trigger's entire product.
+#
+# WHAT IS STILL DELIBERATELY NOT COVERED, said plainly so you do not have to
+# re-derive it: the pull request that BREAKS a spec still goes green. The
+# baseline catches the break one merge later, not before it lands. Closing that
+# would need the `paths:` widening rejected above, and the accepted cost is a red
+# default branch for the length of one fix — bounded, attributed, and paid by the
+# author who caused it rather than by the next passer-by.
 on:
   pull_request:
     paths:
       - 'tests/e2e/acceptance*.spec.ts'
+  # The DEFAULT-BRANCH BASELINE. Deliberately NOT `paths:`-filtered: while the
+  # lane holds a spec, ANY merge could be the one that breaks it, and which
+  # sources that spec reads is precisely what a filter cannot know. The
+  # `membership` gate below is what keeps that affordable.
+  push:
+    branches: [main]
 
 # Cancel older runs on the same ref when a new commit lands (saves CI minutes).
 # Safe interpolation: github.workflow is a fixed workflow name; github.ref is a
 # validated git ref identifier (not user-controlled free-form input).
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # PULL-REQUEST-ONLY — see the header. A cancelled baseline is a merge whose
+  # effect on the lane nobody ever measured, which is the one thing the baseline
+  # exists to prevent.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # Is there anything in the lane to run? A checkout and a `find` — no Postgres,
+  # no install, no browser, no dev server — so an empty lane costs seconds per
+  # merge instead of the full setup the lane pays to run zero tests.
+  #
+  # ⚠️ On `pull_request` this answers `true` unconditionally, and that is not a
+  # shortcut. The `paths:` filter has ALREADY decided that a triggered PR run
+  # should happen. Answering anything else here would turn the `acceptance` job
+  # below into a greyed `Skipped` check on somebody's pull request, which is the
+  # exact defect this workflow was split out of ci.yml to remove. The gate exists
+  # for `push`, where no filter has spoken and no pull request is watching.
+  membership:
+    name: Does the lane hold a spec?
+    # Runner selection goes through the `MOTIR_RUNNER` Actions variable rather
+    # than a hardcoded label — the same seam every job in ci.yml uses. An unset
+    # variable is the empty string, which is falsy, so a repo with no self-hosted
+    # runners falls through to `ubuntu-latest`.
+    runs-on: ${{ vars.MOTIR_RUNNER || 'ubuntu-latest' }}
+    outputs:
+      run: ${{ steps.gate.outputs.run }}
+      count: ${{ steps.gate.outputs.count }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: gate
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          # COUNT WHAT THE LANE'S CONFIG WOULD COLLECT, not what the `paths:`
+          # filter above matches. playwright.acceptance.config.ts sets
+          # `testMatch: /acceptance.*\.spec\.ts/`, an UNANCHORED regex over the
+          # path — so `tests/e2e/checkout-acceptance.spec.ts` is a member even
+          # though the trigger glob (a basename prefix) would never match it.
+          # The gate must never answer "empty" while Playwright would collect
+          # something, or the baseline silently stops covering that spec; erring
+          # the other way only costs a run.
+          #
+          # `find` is captured on its own line, with failures swallowed: under
+          # `pipefail` a missing or unreadable `tests/e2e` would otherwise fail
+          # this step and red-light every merge. A generated project that has not
+          # written any E2E tests yet has no such directory, and "no directory"
+          # is an EMPTY LANE, not an error.
+          FOUND=$(find tests/e2e -type f -name '*.spec.ts' 2>/dev/null || true)
+          COUNT=$(printf '%s\n' "${FOUND}" | grep -cE 'acceptance.*\.spec\.ts$' || true)
+          echo "acceptance specs in the lane: ${COUNT}"
+          if [ "${EVENT_NAME}" = 'pull_request' ]; then
+            # The paths filter already decided; a triggered PR run always runs.
+            RUN=true
+          elif [ "${COUNT}" -gt 0 ]; then
+            RUN=true
+          else
+            RUN=false
+          fi
+          echo "event=${EVENT_NAME} run=${RUN}"
+          echo "run=${RUN}" >> "$GITHUB_OUTPUT"
+          echo "count=${COUNT}" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Acceptance lane membership"
+            echo ""
+            echo "- specs in the lane: **${COUNT}**"
+            echo "- event: \`${EVENT_NAME}\`"
+            echo "- running the lane: **${RUN}**"
+            if [ "${RUN}" = 'false' ]; then
+              echo ""
+              echo "The lane is empty, so this baseline stopped here rather than"
+              echo "paying the full setup to run zero tests."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
   acceptance:
     name: Acceptance video
+    needs: membership
+    # ⚠️ THIS EXPRESSION MUST NAME NOTHING BUT THE MEMBERSHIP OUTPUT. This is the
+    # one job a pull request can see, so anything else here — a `paths` guess, an
+    # actor check, a label — turns it into the greyed `Skipped` check the whole
+    # split-out-of-ci.yml design exists to remove. The membership job answers
+    # `true` for every `pull_request` event by construction, so on a PR this
+    # condition is satisfied unconditionally and only `push` can ever skip.
+    # `tests/acceptance-video-uploader.test.ts` asserts both halves.
+    if: needs.membership.outputs.run == 'true'
     # Runner selection goes through the `MOTIR_RUNNER` Actions variable rather
     # than a hardcoded label — the same seam every job in ci.yml uses, and a new
     # workflow file is a new `runs-on` site. An unset variable is the empty
@@ -97,8 +249,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # WHICH specs this PR owns. The `paths:` filter above already guarantees
-      # at least one, but the uploader needs the LIST: publishing SUPERSEDES a
+      # WHICH specs this PR owns. On a pull request the `paths:` filter above
+      # already guarantees at least one (a baseline owns none — see below), but
+      # the uploader needs the LIST: publishing SUPERSEDES a
       # story's current evidence and each recording targets its OWN declared
       # story, so a run that published everything it recorded would replace the
       # receipts of every other story with a spec (MOTIR-1937). The uploader
@@ -111,6 +264,19 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
+          # THE DEFAULT-BRANCH BASELINE OWNS NOTHING. A `push` event has no base
+          # ref to diff against — BASE_SHA is empty — and the baseline must not
+          # publish anyway: the receipt was published by the pull request while
+          # the story was in review, and a merge is not a new moment to record.
+          # Emitting an EMPTY list is exactly what the uploader fails closed on,
+          # so the run REHEARSES. (The publish step is ALSO gated to pull_request
+          # events — two mechanisms, because a wrong answer here would SUPERSEDE
+          # a story's evidence rather than merely waste a run.)
+          if [ -z "${BASE_SHA}" ]; then
+            echo "no base ref (event: ${GITHUB_EVENT_NAME}) — the baseline owns no specs and publishes nothing"
+            echo "specs=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           # A pull_request checkout is the MERGE commit at depth 1, which carries
           # both parents — so the base is normally already present. Fetch it if it
           # is not, rather than paying `fetch-depth: 0` on every run.
@@ -165,8 +331,16 @@ jobs:
       # The `::error::` ANNOTATION and the job SUMMARY (MOTIR-1905) stay — they
       # put the reason on the run page instead of thousands of lines into the
       # raw log. They are now a second channel rather than the only one.
+      #
+      # ⚠️ `pull_request` ONLY. The DEFAULT-BRANCH BASELINE runs the specs and
+      # publishes nothing: the receipt belongs to the moment the story was in
+      # review, not to whatever merge happened to run the lane afterwards. This
+      # is the first of the two mechanisms enforcing that — the second is the
+      # empty owned-spec list the step above emits on `push`. Belt and braces,
+      # because the failure mode is SUPERSEDING a story's evidence rather than
+      # merely wasting a run.
       - name: Publish the acceptance video
-        if: success()
+        if: success() && github.event_name == 'pull_request'
         uses: ./.github/actions/upload-acceptance-video
         with:
           pr-ref: ${{ github.head_ref }}
