@@ -15,6 +15,37 @@
 # whose `meta.githubCommitRef` matches the PR's head branch. Vercel's
 # lifecycle hook then deletes the linked database branch automatically.
 #
+# Three configuration states, three DIFFERENT outcomes — do not collapse them
+# ---------------------------------------------------------------------------
+# The `Classify Vercel configuration` step below splits on how many of the
+# three required values are set, and the three arms are deliberately not the
+# same. An earlier revision tested only "is anything missing?" and exited 1,
+# which made state (a) — the state EVERY freshly scaffolded repo is in —
+# report a red X on every single closed PR, for an integration its owner was
+# never asked to set up. A permanently red check teaches people to stop
+# reading checks, so it corrupts the signal exactly as much as a lane that
+# reports success while failing does.
+#
+#   (a) NONE of the three set → this repo does not use Vercel previews.
+#       Log a notice, skip the delete step, exit 0. There is nothing to
+#       clean up and nothing was misconfigured. NOT an error.
+#   (b) SOME but not all set → a real misconfiguration, and the loud one:
+#       whoever set two of three believes cleanup is running. It is not, and
+#       database branches are silently accumulating until previews start
+#       failing with "Resource provisioning failed". Name exactly which
+#       values are missing and exit 1. DO NOT SOFTEN THIS ARM — collapsing
+#       it back into (a) is the fail-open shape this file exists to avoid.
+#   (c) ALL three set → enumerate and delete, as documented below.
+#
+# ⚠️ Why the split lives in a STEP and not in a job-level `if:`. The `secrets`
+# context is not available in `jobs.<id>.if` (only `github`, `needs`, `vars`
+# and `inputs` are), so a job-level condition can read the two `vars.*` but is
+# blind to `secrets.VERCEL_TOKEN` — it could not tell (a) from a (b) whose only
+# set value is the token, and would silently skip the case that most needs to
+# shout. Inside the step all three arrive through the job's `env:` block, so
+# the classification is total. The cost is that the job always runs and so
+# always reports a (green) check; see the CI section of README.md.
+#
 # Required GitHub repo configuration
 # ----------------------------------
 # Secrets (Settings → Secrets and variables → Actions → Secrets):
@@ -70,22 +101,59 @@ jobs:
       PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
       PR_NUMBER: ${{ github.event.pull_request.number }}
     steps:
-      - name: Verify required config is set
+      # Splits on the three states documented in the header block. The two
+      # arms that do NOT proceed are opposites on purpose: nothing configured
+      # is a no-op, half configured is a hard failure.
+      - name: Classify Vercel configuration
+        id: config
         run: |
           set -euo pipefail
+          present=()
           missing=()
-          [ -z "${VERCEL_TOKEN}" ] && missing+=("secrets.VERCEL_TOKEN")
-          [ -z "${VERCEL_ORG_ID}" ] && missing+=("vars.VERCEL_ORG_ID")
-          [ -z "${VERCEL_PROJECT_ID}" ] && missing+=("vars.VERCEL_PROJECT_ID")
+          for name in VERCEL_TOKEN VERCEL_ORG_ID VERCEL_PROJECT_ID; do
+            case "$name" in
+              VERCEL_TOKEN) label="secrets.${name}" ;;
+              *) label="vars.${name}" ;;
+            esac
+            # `${!name:-}` (not `${!name}`): the job's env: block always defines
+            # all three — empty when unset — but under `set -u` a bare indirect
+            # expansion of a genuinely absent variable aborts the step, which is
+            # the red X this whole split exists to remove. Tolerate both.
+            if [ -n "${!name:-}" ]; then present+=("$label"); else missing+=("$label"); fi
+          done
+
+          # (a) Nothing configured — this repo does not use Vercel previews.
+          if [ "${#present[@]}" -eq 0 ]; then
+            echo "::notice::No Vercel preview configuration on this repo — nothing to clean up."
+            echo "This repo sets none of secrets.VERCEL_TOKEN, vars.VERCEL_ORG_ID, vars.VERCEL_PROJECT_ID,"
+            echo "so it is not linked to a Vercel project and has no preview deployments to delete."
+            echo "That is a supported state, not an error — this job is a no-op and the check is green."
+            echo ""
+            echo "If you DO want preview-database cleanup, set all three (see the README's CI section)."
+            echo 'configured=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # (b) Half configured — the dangerous state. Cleanup is not running,
+          #     and whoever set the other values believes it is.
           if [ "${#missing[@]}" -gt 0 ]; then
-            echo "::error::Missing required configuration: ${missing[*]}"
-            echo "Set these in the repo's GitHub Actions settings:"
+            echo "::error::Vercel preview cleanup is PARTIALLY configured — missing: ${missing[*]}"
+            echo "Already set: ${present[*]}"
+            echo ""
+            echo "Cleanup cannot run, so preview database branches will accumulate against your"
+            echo "branch cap until new previews fail with 'Resource provisioning failed'."
+            echo "Set the missing values in the repo's GitHub Actions settings:"
             echo "  Secrets:   Settings → Secrets and variables → Actions → Secrets"
             echo "  Variables: Settings → Secrets and variables → Actions → Variables"
+            echo "…or clear ALL three to opt out of preview cleanup entirely."
             exit 1
           fi
 
+          # (c) Fully configured — proceed.
+          echo 'configured=true' >> "$GITHUB_OUTPUT"
+
       - name: Enumerate and delete preview deployments
+        if: steps.config.outputs.configured == 'true'
         run: |
           set -euo pipefail
 

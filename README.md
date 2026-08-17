@@ -391,6 +391,22 @@ variables → Actions):
 secrets) because they appear in the linked `.vercel/repo.json` and aren't
 sensitive — anyone with repo access can already see them.
 
+**If you set none of them, nothing breaks.** A repo that isn't linked to a
+Vercel project has no preview deployments to delete, so the workflow logs a
+notice and exits successfully. You will still see a green
+`Delete preview deployments` check on every closed PR — the workflow is
+triggered by `pull_request: closed`, and that trigger can't be filtered on
+whether the config exists, so the job runs and reports a no-op rather than
+not appearing at all. (Contrast the acceptance-video and design-result
+lanes above, whose opt-in _is_ expressible as a `paths:` filter, so they
+leave no check behind.)
+
+Setting **some but not all three** is the one case that fails the check, on
+purpose: cleanup is not running, and preview database branches are quietly
+accumulating until new previews fail with "Resource provisioning failed."
+The job names exactly which values are missing. Clear all three to opt out
+entirely.
+
 ## License
 
 [MIT](LICENSE). Fork freely. The copyright notice in LICENSE applies only
