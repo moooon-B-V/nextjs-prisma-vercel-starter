@@ -21,13 +21,17 @@ Two reasons, and the second is the one people miss.
 mockup for its surface. Without one it improvises, and you get a screen nobody
 designed.
 
-**2. It is published to your work item.** On a pull request that touches
-`design/**`, the `Design result` lane sends the changed assets to the card the
-branch names, and a reviewer reads them **on the card in Motir** — the note
+**2. It is published to your work item.** Once the three files are committed,
+the agent that drew them calls Motir's **`publish_design_result`** tool, naming
+the card, and a reviewer reads the result **on the card in Motir** — the note
 rendered, the mock in a sandboxed frame, the screenshot in the lightbox. No
 GitHub trip, no raw-file URLs.
 
-That publish is automatic. There is nothing to upload.
+> ⚠️ **Nothing else makes that call.** There is no CI lane, no check and no
+> background job that publishes for you. A design task that commits its three
+> files and never calls the tool looks _identical_ to one that succeeded — files
+> written, commit landed, pull request open, checks green — and the card is
+> empty. The publish is the last step of the task, not a consequence of it.
 
 ## What each file is
 
@@ -37,12 +41,14 @@ One file per area, opening with a table that indexes the area's surfaces, then a
 `##` section per surface: the primitives it composes, the exact copy, and the
 colour + shape token for every element.
 
-> **The publisher scopes the note to the SECTIONS your PR changed.** It maps each
-> diff hunk to its nearest enclosing `##` heading and publishes those sections
-> whole. So a card that adds one surface publishes one section, not the whole
-> file — which matters, because a mature area's notes run to hundreds of
-> kilobytes. A change confined to the index table above the first `##` publishes
-> no note: the table is an index, and the section carries the meaning.
+> **Publish the SECTIONS you wrote, never the whole file.** `publish_design_result`
+> takes `noteMd`, and what belongs in it is the `##` sections this task changed —
+> you wrote them, so you know which they are. This matters because a mature
+> area's notes run to hundreds of kilobytes; the call caps `noteMd` at 64 KiB and
+> truncates at a `##` boundary for display, while the complete file still ships
+> as the `note_file` asset. A change confined to the index table above the first
+> `##` publishes no section: the table is an index, and the section carries the
+> meaning.
 
 ### `<surface>.mock.html` — the source of truth
 
@@ -67,22 +73,36 @@ chromium — full page, light theme, `deviceScaleFactor: 2`, viewport width ~120
 
 ## How a design reaches the right card
 
-The publisher resolves the target from your **branch name** first, then the **PR
-title**, looking for a `<KEY>-<number>` work-item key:
+**You name it.** The call takes the work item's key, so nothing is inferred from
+a branch, a pull-request title or a diff:
 
 ```
-design/ACME-42-settings-panel        →  publishes to ACME-42
+publish_design_result  key: "ACME-42"
+  assets: [ the *.mock.html as `mock`,
+            the .png as `image`,
+            design-notes.md as `note_file` ]
+  noteMd: the ## sections this task wrote
 ```
 
-**There is no fallback.** If neither carries a key, the lane logs what it would
-have published and exits 0 without publishing — a design attached to the wrong
-card is worse than one attached to none.
+That is the point of the design, and it is worth one sentence on why. The
+previous mechanism read a `<KEY>-<number>` out of the branch ref and then the
+title — so a pull request that touched `design/**` in passing published those
+assets onto whichever card its own branch happened to name, silently, under a
+green check. A publisher that guesses its target from a string somebody typed
+will eventually guess wrong. This one is told.
+
+The server still refuses the two mistakes it can see: a **container** target
+(a design result belongs to the leaf that produced it) and a key that is not a
+child of a declared `withinParentKey`.
 
 ## Setup
 
-Nothing, if your repository is connected to Motir through the GitHub App: the
-lane authenticates keylessly off its own GitHub Actions OIDC identity.
+**Nothing.** The agent publishes with its own Motir credential — the same one it
+already holds to read the card and move it — on the `work_item:edit` permission
+it already has.
 
-Otherwise set a `MOTIR_UPLOAD_TOKEN` repository secret to a Motir API token with
-the `integration` scope. With neither, the lane logs that publishing is opt-in
-and exits 0 — it never fails your build.
+There is no repository secret to set, no `MOTIR_UPLOAD_TOKEN`, no workflow to
+enable and no OIDC permission to grant. If you are publishing from something
+that is not an MCP client — your own CI, a design tool, a script — the REST
+route `POST /api/work-items/{id}/design-evidence` is still there and is the
+supported door for it.

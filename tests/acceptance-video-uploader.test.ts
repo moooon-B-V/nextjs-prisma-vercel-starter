@@ -1838,8 +1838,11 @@ describe('the action manifests carry no template expressions in their descriptio
 // ── The lane itself ─────────────────────────────────────────────────────────
 //
 // A workflow file is not typechecked, linted or executed by any suite, so the
-// property that makes this lane HONEST is asserted here or nowhere. The same
-// shape `tests/design-assets-uploader.test.ts` uses for the design-result lane.
+// property that makes this lane HONEST is asserted here or nowhere. (This
+// used to cite `tests/design-assets-uploader.test.ts` as the sibling using the
+// same shape; that spec and the design-result lane it covered were retired by
+// MOTIR-3797 — the agent publishes a design result through Motir's
+// `publish_design_result` tool, so there is no workflow left to assert about.)
 
 describe('the acceptance-video lane', () => {
   const wf = fs.readFileSync(
