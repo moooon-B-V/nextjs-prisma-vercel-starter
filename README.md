@@ -195,14 +195,14 @@ tests/        Vitest integration tests (real Postgres) + Playwright E2E
               specs in `tests/e2e/`. See `playwright.config.ts` and
               `vitest.config.ts`.
 design/       Design assets — three files per surface, published to the work
-              item by `design-result.yml`. See `design/README.md`.
+              item by the agent that drew them, with Motir's
+              `publish_design_result` tool. See `design/README.md`.
 docs/         Project docs.
 scripts/      Dev scripts. `db-up.sh` brings up Docker Postgres + migrations.
 public/       Static assets.
 .github/
   workflows/  CI definitions: `ci.yml` (lint, typecheck, unit, build, e2e),
               `acceptance-video.yml` (paths-filtered story-acceptance lane),
-              `design-result.yml` (paths-filtered design-result lane),
               and the preview-database cleanup.
 ```
 
@@ -225,27 +225,25 @@ Jobs:
   The Husky pre-commit hook catches lint/format issues before they reach CI;
   CI is the backstop. Total runtime targets <5 min on a fresh clone.
 
-### The design-result lane — its own paths-filtered workflow
+### There is NO design-result lane — the agent publishes
 
-[`.github/workflows/design-result.yml`](.github/workflows/design-result.yml)
-publishes a design task's result — the changed `design-notes.md` section, the
-`*.mock.html` mock and the `.png` export — to its work item in Motir, where a
-reviewer reads it on the card instead of opening raw files on GitHub. It is
-**opt-in by touching a design asset**, enforced the same way the acceptance lane
-enforces its own opt-in — by the trigger, not by a job-level `if:`:
-
-```yaml
-on:
-  pull_request:
-    paths:
-      - 'design/**'
-```
-
-The target card comes from the branch name (`design/<KEY>-<n>-slug`), then the
-PR title. There is no fallback: with no key it logs what it would have published
-and exits 0. Auth is keyless GitHub OIDC, with a `MOTIR_UPLOAD_TOKEN` secret as
-the fallback; with neither, publishing is skipped and your build still passes.
+A design task's result — the `design-notes.md` sections it wrote, the
+`*.mock.html` mock and the `.png` export — reaches its work item in Motir
+because **the agent that drew it calls `publish_design_result`**, naming the
+card. A reviewer then reads it on the card instead of opening raw files on
+GitHub. There is no workflow, no check and no repository secret involved, and
 `design/README.md` is the authoring guide.
+
+This repository shipped a `design-result.yml` lane until MOTIR-3797, and it is
+worth one paragraph on why it went, because the reason is about scaffolded
+repositories specifically. The lane ran a **publisher script that had to be
+present in the repository**, so every repository scaffolded from this one
+carried a copy — and a copy has no way to know it has gone stale. Nothing
+imports it, nothing type-checks it against an interface, no check compares it to
+anything. This starter's copy sat seventeen days and five bug fixes behind its
+original, still resolving its target card from the branch ref, and every signal
+was green the entire time. A tool the agent calls is the same publish with none
+of the copying.
 
 ### The acceptance-video lane — its own paths-filtered workflow
 
@@ -397,9 +395,9 @@ notice and exits successfully. You will still see a green
 `Delete preview deployments` check on every closed PR — the workflow is
 triggered by `pull_request: closed`, and that trigger can't be filtered on
 whether the config exists, so the job runs and reports a no-op rather than
-not appearing at all. (Contrast the acceptance-video and design-result
-lanes above, whose opt-in _is_ expressible as a `paths:` filter, so they
-leave no check behind.)
+not appearing at all. (Contrast the acceptance-video lane above, whose
+opt-in _is_ expressible as a `paths:` filter, so it leaves no check
+behind.)
 
 Setting **some but not all three** is the one case that fails the check, on
 purpose: cleanup is not running, and preview database branches are quietly
