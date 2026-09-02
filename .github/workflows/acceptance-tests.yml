@@ -1,10 +1,17 @@
-name: Acceptance video
+name: Acceptance tests
 
-# ── The acceptance-video lane, spec-scoped (MOTIR-1941 / MOTIR-1937 / MOTIR-1958) ──
+# ── The acceptance-test lane, spec-scoped (MOTIR-1941 / MOTIR-1937 / MOTIR-1958) ──
 #
-# Records the story-acceptance clip on a GREEN run and publishes it to the story
-# in Motir, where a reviewer watches it and approves. See
-# docs/acceptance-video.md for the authoring guide and the publish contract.
+# Records the story-acceptance clip on a GREEN run, for a reviewer to watch and
+# approve. See docs/acceptance-video.md for the authoring guide.
+#
+# ⚠️ THIS LANE RECORDS; IT DOES NOT PUBLISH (MOTIR-4097, following motir-core's
+# MOTIR-4096). The recording is unchanged — Playwright still runs with
+# `video: 'on'` and the clips, traces and `chapters.json` sidecars still land in
+# this lane's Playwright report artifact. What LEFT is the CI uploader: the
+# receipt is published by the AGENT, through the Motir MCP surface, and no job
+# here holds a Motir credential any more. The lane's name says what it does — it
+# runs the acceptance tests.
 #
 # ⚠️ WHY ITS OWN WORKFLOW, AND NOT A JOB IN ci.yml.
 # The requirement is that a PR which owns no acceptance spec shows NO acceptance
@@ -47,9 +54,9 @@ name: Acceptance video
 #
 # WHAT RUNS WHEN, in full — this table is the whole trigger policy:
 #
-#   PR changing an `acceptance*.spec.ts`   lane runs · PUBLISHES that spec's story
+#   PR changing an `acceptance*.spec.ts`   lane runs
 #   PR changing anything else              NO RUN, NO CHECK
-#   push to `main`, lane HAS ≥1 spec       lane runs · NEVER publishes
+#   push to `main`, lane HAS ≥1 spec       lane runs
 #   push to `main`, lane is EMPTY          membership gate only (~10s), nothing else
 #
 # THE PROBLEM IT CLOSES. The `pull_request` filter is deliberately blind to your
@@ -78,16 +85,6 @@ name: Acceptance video
 # run is never skipped. If you ever make that answer conditional on something a
 # pull request can see, you have reintroduced the greyed check.
 #
-# ⚠️ THE BASELINE TESTS; IT NEVER PUBLISHES. Two independent mechanisms, because
-# publishing SUPERSEDES a story's evidence and one guard is not enough for that:
-# the publish step is gated to `pull_request` events, AND the owned-specs step
-# emits an EMPTY list on `push` (there is no base ref to diff against), which the
-# uploader already fails closed on. A baseline run therefore REHEARSES — it
-# records and checks the clips and writes none of them anywhere. This preserves
-# the original reason there was no `push:` trigger at all: the receipt belongs to
-# the moment the story was in review, and re-publishing after the merge would
-# only supersede it with an identical clip (docs/acceptance-video.md).
-#
 # ⚠️ AND CANCELLING SUPERSEDED RUNS IS PULL-REQUEST-ONLY. On a PR only the tip
 # matters, so cancelling saves minutes. On the default branch it is wrong:
 # back-to-back merges would cancel each other's baseline and destroy the
@@ -111,6 +108,13 @@ on:
     branches: [main]
 
 # Cancel older runs on the same ref when a new commit lands (saves CI minutes).
+#
+# ⚠️ THE GROUP CARRIES `github.workflow`, WHICH IS THIS FILE'S `name:` — so the
+# MOTIR-4097 rename changed the group's literal prefix. Harmless, and checked
+# rather than assumed: the group only ever has to distinguish runs of THIS
+# workflow from each other, and every run after the rename reads the same new
+# name. Nothing outside this file joins the group.
+#
 # Safe interpolation: github.workflow is a fixed workflow name; github.ref is a
 # validated git ref identifier (not user-controlled free-form input).
 concurrency:
@@ -190,7 +194,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   acceptance:
-    name: Acceptance video
+    name: Playwright E2E (acceptance)
     needs: membership
     # ⚠️ THIS EXPRESSION MUST NAME NOTHING BUT THE MEMBERSHIP OUTPUT. This is the
     # one job a pull request can see, so anything else here — a `paths` guess, an
@@ -198,7 +202,7 @@ jobs:
     # split-out-of-ci.yml design exists to remove. The membership job answers
     # `true` for every `pull_request` event by construction, so on a PR this
     # condition is satisfied unconditionally and only `push` can ever skip.
-    # `tests/acceptance-video-uploader.test.ts` asserts both halves.
+    # `tests/ci-acceptance-lane.test.ts` asserts both halves.
     if: needs.membership.outputs.run == 'true'
     # Runner selection goes through the `MOTIR_RUNNER` Actions variable rather
     # than a hardcoded label — the same seam every job in ci.yml uses, and a new
@@ -207,10 +211,12 @@ jobs:
     # self-hosted runners keeps working. See the block above `jobs:` in ci.yml.
     runs-on: ${{ vars.MOTIR_RUNNER || 'ubuntu-latest' }}
     permissions:
+      # ⚠️ NO `id-token: write` — RETIRED WITH THE PUBLISHER (MOTIR-4097). This
+      # job carried it so the vendored uploader could mint a keyless GitHub OIDC
+      # token; nothing in this workflow mints a token any more, so the grant has
+      # no consumer and is dropped rather than left standing. `contents: read` is
+      # what checkout needs.
       contents: read
-      # Lets the uploader mint a keyless GitHub OIDC token (no secret needed
-      # for a repo connected via the Motir GitHub App).
-      id-token: write
     services:
       postgres:
         image: postgres:16-alpine
@@ -248,44 +254,6 @@ jobs:
       HUSKY: '0'
     steps:
       - uses: actions/checkout@v4
-
-      # WHICH specs this PR owns. On a pull request the `paths:` filter above
-      # already guarantees at least one (a baseline owns none — see below), but
-      # the uploader needs the LIST: publishing SUPERSEDES a
-      # story's current evidence and each recording targets its OWN declared
-      # story, so a run that published everything it recorded would replace the
-      # receipts of every other story with a spec (MOTIR-1937). The uploader
-      # FAILS CLOSED, so if this step ever stops producing a list, the run
-      # rehearses instead of resurrecting that bug — belt and braces alongside
-      # the trigger filter.
-      - name: Which acceptance specs does this run own?
-        id: owned-specs
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: |
-          set -euo pipefail
-          # THE DEFAULT-BRANCH BASELINE OWNS NOTHING. A `push` event has no base
-          # ref to diff against — BASE_SHA is empty — and the baseline must not
-          # publish anyway: the receipt was published by the pull request while
-          # the story was in review, and a merge is not a new moment to record.
-          # Emitting an EMPTY list is exactly what the uploader fails closed on,
-          # so the run REHEARSES. (The publish step is ALSO gated to pull_request
-          # events — two mechanisms, because a wrong answer here would SUPERSEDE
-          # a story's evidence rather than merely waste a run.)
-          if [ -z "${BASE_SHA}" ]; then
-            echo "no base ref (event: ${GITHUB_EVENT_NAME}) — the baseline owns no specs and publishes nothing"
-            echo "specs=" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          # A pull_request checkout is the MERGE commit at depth 1, which carries
-          # both parents — so the base is normally already present. Fetch it if it
-          # is not, rather than paying `fetch-depth: 0` on every run.
-          git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null ||
-            git fetch --depth=1 origin "${BASE_SHA}"
-          SPECS=$(git diff --name-only "${BASE_SHA}" HEAD -- 'tests/e2e/acceptance*.spec.ts' | tr '\n' ' ')
-          echo "owned acceptance specs: ${SPECS:-<none>}"
-          echo "specs=${SPECS}" >> "$GITHUB_OUTPUT"
-
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
@@ -301,55 +269,11 @@ jobs:
       - run: pnpm prisma migrate deploy
       - run: pnpm exec playwright install --with-deps chromium
       - run: pnpm test:e2e:acceptance
-      # Publish ONLY the recordings whose spec this PR changed (MOTIR-1937 /
-      # MOTIR-1941). Publishing SUPERSEDES a story's current evidence and each
-      # recording targets its OWN declared story, so a run that published
-      # everything it recorded would replace receipts it has nothing to do with.
-      #
-      # ⚠️ NO `continue-on-error` HERE — REMOVED BY MOTIR-2690, DO NOT PUT IT BACK.
-      #
-      # It rewrote this step's conclusion to `success` — on the checks UI, in
-      # `gh pr checks`, AND in the REST API — even when the uploader exited 1.
-      # The measured cost, upstream in motir-core where this lane was vendored
-      # from (MOTIR-2499): from 2026-08-07 the publish failed on every run
-      # ("Published 0 of 2", two `##[error]` lines), the lane reported `pass`
-      # each time, and two stories lost their receipt with nothing anywhere
-      # saying so. A check that cannot fail is worse than no check, because it
-      # actively reassures — nobody re-reads the log of a passing step.
-      #
-      # It was there so a side-effect could never gate a merge. Both cases that
-      # justified it are handled INSIDE the uploader, which returns 0 for each —
-      # so removing the wrapper costs nothing it was actually buying:
-      #   • NO CREDENTIAL (a fork PR gets neither OIDC nor the secret) — the
-      #     script logs "BYOK is opt-in" and returns.
-      #   • A DEFECT IN A SPEC THIS RUN DOES NOT OWN — an unwatchable REHEARSED
-      #     recording is reported, annotated as a `warning`, and counted
-      #     separately; only the specs this PR changed can fail it.
-      # What DOES fail the step is exactly what should: a story this PR owns
-      # ending the run without a published receipt.
-      #
-      # The `::error::` ANNOTATION and the job SUMMARY (MOTIR-1905) stay — they
-      # put the reason on the run page instead of thousands of lines into the
-      # raw log. They are now a second channel rather than the only one.
-      #
-      # ⚠️ `pull_request` ONLY. The DEFAULT-BRANCH BASELINE runs the specs and
-      # publishes nothing: the receipt belongs to the moment the story was in
-      # review, not to whatever merge happened to run the lane afterwards. This
-      # is the first of the two mechanisms enforcing that — the second is the
-      # empty owned-spec list the step above emits on `push`. Belt and braces,
-      # because the failure mode is SUPERSEDING a story's evidence rather than
-      # merely wasting a run.
-      - name: Publish the acceptance video
-        if: success() && github.event_name == 'pull_request'
-        uses: ./.github/actions/upload-acceptance-video
-        with:
-          pr-ref: ${{ github.head_ref }}
-          pr-title: ${{ github.event.pull_request.title }}
-          changed-specs: ${{ steps.owned-specs.outputs.specs }}
-          token: ${{ secrets.MOTIR_UPLOAD_TOKEN }}
-      # Always upload the report — a green run's is the only place the recorded
-      # video and trace survive for a reviewer to check by hand, and a red one is
-      # how the lane is debugged at all.
+      # Always upload the report. Since MOTIR-4097 this is the ONLY thing the
+      # lane emits: a green run's report is where the recorded video, trace and
+      # `chapters.json` survive — for a reviewer to watch by hand, and for the
+      # AGENT to publish the receipt from over the Motir MCP surface — and a red
+      # one is how the lane is debugged at all.
       - name: Upload the acceptance Playwright report
         if: always()
         uses: actions/upload-artifact@v4

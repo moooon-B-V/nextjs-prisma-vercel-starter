@@ -7,8 +7,10 @@ level, not per subtask). It is distinct from verification: your tests prove the
 code is **correct**; the video is what a person watches to decide it is **what
 they wanted**.
 
-This starter ships the lane pre-wired, so a project generated from it can produce
-that receipt on day one.
+This starter ships the **recording** lane pre-wired, so a project generated from it
+can produce that receipt on day one. **CI records; it does not publish** — the
+agent uploads the receipt over the Motir MCP surface (MOTIR-4097, following
+motir-core's MOTIR-4096).
 
 ## Writing an acceptance spec
 
@@ -40,8 +42,8 @@ Two rules that are easy to get wrong:
   story-level. The key it declares is what the clip is published against.
 - **Pace it.** The clip is a thing a person WATCHES. `chapter()` paces itself and
   `beat()` adds a breath after a user-visible action. A spec that races through
-  passes every assertion and produces a receipt nobody can review — the uploader
-  refuses to publish a clip under the watchable floor, and says so.
+  passes every assertion and produces a receipt nobody can review — and since
+  MOTIR-4097 nothing in CI measures that for you.
 
 Run it locally with `pnpm test:e2e:acceptance`. It uses its own Playwright config
 (`playwright.acceptance.config.ts`, port 3200) so it can run alongside the main
@@ -76,30 +78,32 @@ there. Two consequences worth knowing before they surprise you:
 
 ## What CI does
 
-| Run                                              | Records + checks           | Publishes          |
-| ------------------------------------------------ | -------------------------- | ------------------ |
-| PR that changes `tests/e2e/acceptance-X.spec.ts` | yes                        | **only X's story** |
-| PR that changes no acceptance spec               | **no run at all**          | nothing            |
-| Push to the default branch, lane holds ≥ 1 spec  | yes — the **baseline**     | **nothing, ever**  |
-| Push to the default branch, lane is empty        | no — gate job only (~10 s) | nothing            |
+| Run                                              | Records + checks           |
+| ------------------------------------------------ | -------------------------- |
+| PR that changes `tests/e2e/acceptance-X.spec.ts` | yes                        |
+| PR that changes no acceptance spec               | **no run at all**          |
+| Push to the default branch, lane holds ≥ 1 spec  | yes — the **baseline**     |
+| Push to the default branch, lane is empty        | no — gate job only (~10 s) |
 
-Two properties make that scoping necessary rather than tidy:
+**CI publishes nothing** — that column used to exist and was retired by MOTIR-4097
+(see _Who publishes the receipt_ below). The `paths:` scoping is unchanged, and it
+is now load-bearing for one reason rather than two: a PR that owns no acceptance
+spec must show **no acceptance check at all**, not a greyed `Skipped` one
+(MOTIR-1958). The second reason is worth keeping in view because it governs
+whoever publishes now, wherever they publish from:
 
 1. **Publishing SUPERSEDES.** A new receipt for a story retires the previous one
    and unlinks its video for garbage collection. It is not additive.
 2. **Each recording targets its OWN declared story**, from `acceptanceStory(...)`,
-   not from the PR. So a lane that ran everywhere would republish every story that
-   has a spec, with clips recorded off an unrelated branch that no reviewer
+   not from the branch it was recorded on. A publisher that shipped everything it
+   found would republish every story that has a spec, with clips no reviewer
    watched. That is exactly what happened in Motir's own CI before MOTIR-1937: one
    backend PR republished seven already-accepted stories.
 
 So the lane lives in its **own workflow**,
-[`.github/workflows/acceptance-video.yml`](../.github/workflows/acceptance-video.yml),
-triggered by `on: pull_request: paths: ['tests/e2e/acceptance*.spec.ts']`, and
-the uploader publishes only the recordings produced by the specs that PR
-changed. The workflow recomputes that list itself (`git diff --name-only` against
-the PR base) and passes it to the uploader, which **fails closed** — an empty
-list owns nothing.
+[`.github/workflows/acceptance-tests.yml`](../.github/workflows/acceptance-tests.yml),
+triggered by `on: pull_request: paths: ['tests/e2e/acceptance*.spec.ts']`, plus a
+default-branch baseline.
 
 ### The default-branch baseline
 
@@ -116,8 +120,8 @@ merges green and then sits there until some unrelated PR happens to touch a spec
 — and that PR's author inherits the diagnosis of somebody else's change. The
 baseline puts the red on the merge that caused it.
 
-Three properties keep that affordable and safe, and all three are asserted in
-`tests/acceptance-video-uploader.test.ts`:
+Two properties keep that affordable, and both are asserted in
+`tests/ci-acceptance-lane.test.ts`:
 
 - **It is gated on the lane holding a spec.** A full run installs pnpm, generates
   a Prisma client, migrates a Postgres, downloads a Chromium and boots a dev
@@ -126,11 +130,6 @@ Three properties keep that affordable and safe, and all three are asserted in
   someone writes the first acceptance spec, so that is the common case, not the
   edge case. The `membership` job is a checkout and a `find` — seconds — and the
   rest of the lane only starts if it finds something.
-- **The baseline never publishes.** Two independent mechanisms, because
-  publishing supersedes: the publish step only runs for a `pull_request` event,
-  and the owned-specs step emits an empty list on a push (there is no base ref to
-  diff against), which the uploader fails closed on. A baseline run _rehearses_ —
-  it records and checks the clips and writes none of them anywhere.
 - **Superseded runs are cancelled on PRs only.** On a PR only the tip matters. On
   the default branch, back-to-back merges would cancel each other's baseline and
   leave exactly the "which merge broke it?" ambiguity the baseline removes.
@@ -160,113 +159,83 @@ read its artifacts. This lane needs neither — it runs against `pnpm dev` — b
 no longer waits for a green build, and its `env:` block is a copy of `ci.yml`'s
 `e2e` job rather than a shared one. Change both together.
 
-**Why not just publish from the default branch instead?** Because it breaks the
-flow. Motir's approve action moves a story `in_review → done`, and `in_review` is
-the **PR-open** state — merging is what flips the card to `done`. Publish only
-after merge and the receipt lands once the story is already done, so the reviewer
-never gets to watch-then-approve. This is why the baseline above **runs** the
-lane on the default branch but never **publishes** from it: the two questions are
-separate, and only the first one has changed.
+**Why the baseline never mattered for publishing.** The lane never publishes at
+all now, so the question the old version of this section answered — should a merge
+republish? — has no CI half left. The reasoning behind the answer is still the
+reason the receipt belongs to the review moment: Motir's approve action moves a
+story `in_review → done`, and `in_review` is the **PR-open** state, so a receipt
+that only arrived after the merge would land once the story was already done and
+the reviewer would never get to watch-then-approve.
 
-## Publishing credentials
+## Who publishes the receipt (CHANGED — MOTIR-4097)
 
-The publish is opt-in and no-ops without one of:
+**The agent does, over the Motir MCP surface**, using the credential it already
+holds to read the card and move it. CI publishes nothing and holds no Motir
+credential.
 
-- **Keyless GitHub OIDC** — for a repo connected via the Motir GitHub App. The job
-  already grants `id-token: write`; nothing to configure.
-- **`MOTIR_UPLOAD_TOKEN`** — a Motir API token with the `integration` scope, added
-  as a repository secret, for a repo that is not App-connected.
+So there is no repository secret to create, no `MOTIR_UPLOAD_TOKEN`, and no
+`id-token: write` grant on any job — all three were retired with the uploader.
+If you publish from something that is not an MCP client — your own CI, a script —
+Motir's HTTP publish route is still there and is the supported door for it; see
+`motir-core/docs/e2e/acceptance-video-byok.md`.
 
-With neither present the job still records and checks; it just publishes nothing.
+What CI still owes is the raw material: the clips, traces and `chapters.json`
+sidecars, uploaded as the `playwright-report-acceptance` artifact on every run,
+pass or fail.
 
-## What turns the lane RED (MOTIR-2690)
+## What turns the lane RED
 
-The publish step deliberately carries **no `continue-on-error`**, so its exit code
-is the signal. It fails on exactly one thing: **a story this PR owns ending the
-run without a published receipt** — a failed upload, a clip of its own that is
-too unpaced to watch, or a video of its own too large for the publish target.
+One thing: **a failing acceptance spec**. The lane runs the specs and uploads its
+Playwright report; there is nothing else in it that can fail.
 
-It does **not** fail on any of these:
+Two things that USED to turn it red went with the publisher, and are recorded
+because their absence is not obvious from the file: an upload that failed for a
+story the PR owned, and a clip of that story's own too unpaced to watch. Nothing
+in CI measures watchability now. Pacing is still the spec author's job (`chapter()`
+paces itself, `beat()` adds a breath) and a clip nobody can follow is still a
+receipt nobody can review — it is simply caught by the person watching it rather
+than by a check.
 
-- **No credential.** A fork PR gets neither OIDC nor the secret. The uploader logs
-  that publishing is opt-in and returns 0.
-- **A defect in a spec this run does not own.** An unwatchable or over-limit
-  _rehearsed_ recording is reported, annotated as a `warning`, and counted
-  separately. The PR that changes that spec is the one it fails.
-- **An over-limit TRACE** (MOTIR-1911). The video _is_ the receipt; a debugging
-  aid must not cost a story its evidence. The trace is dropped with a warning and
-  the video publishes without it. An over-limit **video** is the fatal half.
-- **A story that has already been accepted** (MOTIR-2768). The server refuses to
-  supersede an approved receipt, and the uploader reports that as a `notice` and
-  a `⏭️` summary line rather than a failure — once a backlog of accepted stories
-  builds up it is the commonest answer the loop gets.
+**The lane still carries no `continue-on-error`, and it must not acquire one**
+(MOTIR-2690). The original occurrence was the publish step: `continue-on-error`
+rewrites a step's conclusion to `success` in the checks UI, in `gh pr checks`,
+**and** in the REST API. Measured in Motir's own CI, the publish failed on every
+run for three days — `Published 0 of 2`, two `##[error]` lines — while the lane
+reported `pass` each time, and two stories lost their receipt with nothing anywhere
+saying so. That step is gone; the prohibition is kept and widened to the whole
+file, because a check that cannot fail is worse than no check whichever step wears
+it. `tests/ci-acceptance-lane.test.ts` asserts it.
 
-The per-file cap the size gate measures against defaults to 100 MB. **Set the
-action's `max-artifact-bytes` to `10485760` if you self-host Motir** — off-cloud
-the server's real cap is the 10 MB baseline, and left at the default the gate
-waves through artifacts the store will reject.
+## The uploader was VENDORED here, and it is GONE (MOTIR-1941 → MOTIR-4097)
 
-`continue-on-error` was there so a side effect could never gate a merge, and it
-did more than that: it rewrites the step's conclusion to `success` in the checks
-UI, in `gh pr checks`, **and** in the REST API. Measured in Motir's own CI, the
-publish failed on every run for three days — `Published 0 of 2`, two `##[error]`
-lines — while the lane reported `pass` each time, and two stories lost their
-receipt with nothing anywhere saying so. A check that cannot fail is worse than
-no check, because it actively reassures. Do not add it back.
+`scripts/upload-acceptance-video.mjs`, `.github/actions/upload-acceptance-video/`
+and `tests/acceptance-video-uploader.test.ts` used to live here as **copies** of
+motir-core's, kept in sync through a SYNC POINT comment and re-copied whenever
+upstream moved. All three are **deleted** (MOTIR-4097): motir-core retired its own
+publisher in MOTIR-4096, and a vendored copy of a retired publisher is a copy of
+nothing.
 
-The `::error::` annotation and the job summary stay, so the reason lands on the
-run page rather than thousands of lines into the raw log. They are a second
-channel now, not the only one.
+That closes a hazard as well as removing dead code. The vendored action's manifest
+could only be broken here — a `${'{'}{ }}` expression inside an input `description:`
+stops GitHub converting the manifest at all, so the action never LOADS and the
+calling step fails at the end of an otherwise green job (MOTIR-2937, measured on
+this repo's PR #17). motir-core carried the guard for it, because this repo's own
+CI never parses its manifests: this repo owns no acceptance spec, so the
+`paths:`-filtered lane has never fired on a pull request. motir-core deleted that
+guard with the action it guarded, which would have left this copy unguarded
+everywhere — so the copy goes too. `.github/actions/` is now empty; a project
+scaffolded from this template that adds its own composite action is on its own
+format-validation terms, and none of ours.
 
-## Why the uploader is VENDORED here (the MOTIR-1941 decision)
+The rent that vendoring charged is worth recording, since it is why the copy is
+not simply re-pointed somewhere else. Between 2026-07-24 and 2026-08-11 this copy
+fell four upstream cards behind, and one of them had changed the WIRE: MOTIR-2389
+moved the blob store to S3, so `/upload-token` returned a presigned PUT URL and
+the copy was still handing it to `@vercel/blob`'s `put` as a token. Nothing was
+red, because the lane's `paths:` filter never fires here — the first person to hit
+it would have been whoever wrote this repo's first acceptance spec.
 
-`scripts/upload-acceptance-video.mjs` and
-`.github/actions/upload-acceptance-video/` are **copies** of motir-core's, not a
-remote reference. Three options were on the table; this is why this one won:
-
-- **Reference motir-core's Action remotely** (`uses: moooon-B-V/motir-core/...@ref`)
-  — appealing (fixes flow automatically), but **it does not work today**: that
-  composite action's step runs `node scripts/upload-acceptance-video.mjs`, and a
-  composite `run:` resolves against the CALLER's workspace, not the action's own
-  directory. In any repo but motir-core that path does not exist. Making it
-  remotely invocable is a motir-core change (move the script beside the action and
-  invoke it via `${{ github.action_path }}`), out of scope for this repo.
-- **Publish it as its own Action repo** — the cleanest long-term answer and what
-  the BYOK docs imply, but it does not exist yet.
-- **Vendor it** — chosen. It also happens to suit a template: a generated project
-  gets a SNAPSHOT of this repo and never tracks it, so "the copy will drift" is
-  true of every file here, not a cost unique to the uploader. Being self-contained
-  means a generated project's CI does not clone Motir's internals at build time.
-
-The tradeoff is real: MOTIR-1734, MOTIR-1905 and MOTIR-1937 were all uploader
-bugs, and this copy will not receive the next one automatically. Two mitigations:
-`tests/acceptance-video-uploader.test.ts` is vendored alongside it, so the
-behaviour is pinned here and a bad sync fails locally; and when the Action becomes
-remotely invocable, this repo should switch to referencing it and delete the copy.
-
-### Keeping the copy in sync (MOTIR-2693)
-
-That rent came due once already. Between 2026-07-24 and 2026-08-11 this copy fell
-four upstream cards behind, and one of them had changed the WIRE: MOTIR-2389 moved
-the blob store to S3, so `/upload-token` returns a presigned PUT URL and the copy
-was still handing it to `@vercel/blob`'s `put` as a token. Nothing was red, because
-this repo owns no acceptance spec and the lane's `paths:` filter never fires it —
-the first person to hit it would have been whoever wrote the first acceptance spec,
-and what they would have seen is `Failed to parse URL from <a long opaque string>`
-thrown from inside a third-party SDK.
-
-So the three vendored files carry a **SYNC POINT** comment naming the motir-core
-commit they were copied from, and the body below it is upstream **verbatim**:
-
-| file                                                 | local edits                                                                                                                                                                                                       |
-| ---------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `scripts/upload-acceptance-video.mjs`                | the header only                                                                                                                                                                                                   |
-| `.github/actions/upload-acceptance-video/action.yml` | the banner only                                                                                                                                                                                                   |
-| `tests/acceptance-video-uploader.test.ts`            | the header, one commented divergence (`ALREADY_APPROVED_CODE` cannot be pinned to a motir-core class this repo does not have), and the `the acceptance-video lane` block, which asserts on _this_ repo's workflow |
-
-Re-syncing is then `git -C motir-core show <ref>:<path>`, re-apply the header,
-re-read the table. Every local edit you add outside that table is a hunk the next
-sync has to adjudicate — prefer fixing it upstream and re-copying.
-
-Upstream: `motir-core/docs/e2e/acceptance-video-byok.md` (the consumer contract)
-and `motir-core/docs/decisions/acceptance-video.md` (the policy).
+Upstream: `motir-core/docs/e2e/acceptance-video-byok.md` (the consumer contract for
+CI that still publishes over the HTTP route) and
+`motir-core/docs/decisions/acceptance-video.md` (the policy, and MOTIR-4096's
+amendment recording the handover).

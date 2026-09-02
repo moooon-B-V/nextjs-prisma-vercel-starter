@@ -166,7 +166,7 @@ const applied = resolveAxesToApplied({ styleId, paletteId, typeId }); // your ch
 | `pnpm typecheck`           | Run `tsc --noEmit`                                                  |
 | `pnpm test`                | Run Vitest unit / integration tests against a real Postgres         |
 | `pnpm test:e2e`            | Run Playwright E2E tests (spawns the dev server automatically)      |
-| `pnpm test:e2e:acceptance` | Run the acceptance-video lane (records a clip per story flow)       |
+| `pnpm test:e2e:acceptance` | Run the acceptance lane (records a clip per story flow)             |
 
 ## Project layout
 
@@ -202,7 +202,7 @@ scripts/      Dev scripts. `db-up.sh` brings up Docker Postgres + migrations.
 public/       Static assets.
 .github/
   workflows/  CI definitions: `ci.yml` (lint, typecheck, unit, build, e2e),
-              `acceptance-video.yml` (paths-filtered story-acceptance lane),
+              `acceptance-tests.yml` (paths-filtered story-acceptance lane),
               and the preview-database cleanup.
 ```
 
@@ -245,11 +245,11 @@ original, still resolving its target card from the branch ref, and every signal
 was green the entire time. A tool the agent calls is the same publish with none
 of the copying.
 
-### The acceptance-video lane — its own paths-filtered workflow
+### The acceptance lane — its own paths-filtered workflow
 
-[`.github/workflows/acceptance-video.yml`](.github/workflows/acceptance-video.yml)
-records the story-acceptance clip and publishes it to Motir. It is **opt-in by
-authoring a spec**, and that opt-in is enforced by the workflow's own trigger:
+[`.github/workflows/acceptance-tests.yml`](.github/workflows/acceptance-tests.yml)
+records the story-acceptance clip. It is **opt-in by authoring a spec**, and that
+opt-in is enforced by the workflow's own trigger:
 
 ```yaml
 on:
@@ -263,8 +263,12 @@ A PR that changes no acceptance spec never triggers the workflow, so it shows
 is a separate file rather than a job in `ci.yml`: a job-level `if:` that
 evaluates false is still REPORTED as a `Skipped` check, and so is any job added
 just to compute the condition. Only an untriggered _workflow_ leaves nothing on
-the PR. On a PR that does change a spec, the lane runs and publishes only the
-recordings produced by the specs that PR changed. See
+the PR. On a PR that does change a spec, the lane runs and uploads its Playwright report,
+which is where the clips, traces and `chapters.json` sidecars survive.
+
+**CI does not publish the receipt** — the agent does, over the Motir MCP surface,
+the same way it publishes a design result (MOTIR-4097). There is no repository
+secret to set and no `id-token` grant to make. See
 [`docs/acceptance-video.md`](docs/acceptance-video.md).
 
 Because it is a separate workflow it cannot depend on `ci.yml`'s `build` job —
@@ -395,7 +399,7 @@ notice and exits successfully. You will still see a green
 `Delete preview deployments` check on every closed PR — the workflow is
 triggered by `pull_request: closed`, and that trigger can't be filtered on
 whether the config exists, so the job runs and reports a no-op rather than
-not appearing at all. (Contrast the acceptance-video lane above, whose
+not appearing at all. (Contrast the acceptance lane above, whose
 opt-in _is_ expressible as a `paths:` filter, so it leaves no check
 behind.)
 
