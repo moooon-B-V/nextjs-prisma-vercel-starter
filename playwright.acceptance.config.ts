@@ -2,7 +2,7 @@ import { defineConfig, devices } from '@playwright/test';
 import path from 'node:path';
 import { config as loadEnv } from 'dotenv';
 
-// The ACCEPTANCE-VIDEO lane (MOTIR-1941; ported from motir-core's MOTIR-1632 /
+// The ACCEPTANCE lane (MOTIR-1941; ported from motir-core's MOTIR-1632 /
 // MOTIR-1700 lane, already carrying MOTIR-1937's scoping).
 //
 // The main suite (playwright.config.ts) records `video: 'retain-on-failure'` —
@@ -14,11 +14,17 @@ import { config as loadEnv } from 'dotenv';
 // `testMatch` is `acceptance*.spec.ts`; the main config `testIgnore`s the same
 // pattern, so an acceptance spec never runs twice (once unrecorded).
 //
-// WHO PUBLISHES: `scripts/upload-acceptance-video.mjs` reads this lane's
-// `outputDir` after a green run and POSTs the video + trace + chapters to
-// Motir. It publishes ONLY the recordings whose spec the current PR changed
-// (MOTIR-1937) — see docs/acceptance-video.md. A failing run records no video,
-// so the uploader is a no-op: a red acceptance E2E publishes nothing.
+// ⚠️ WHO PUBLISHES — CHANGED 2026-09-01 (MOTIR-4097, following motir-core's
+// MOTIR-4096). This lane's `outputDir` used to be read by a vendored CI uploader
+// (`scripts/upload-acceptance-video.mjs`), which POSTed the video + trace +
+// chapters to Motir. That uploader is RETIRED: the receipt is published by the
+// AGENT, over the Motir MCP surface, and the lane's job now ends at the
+// Playwright report artifact the clips and sidecars land in.
+// What is unchanged is the PRODUCTION side, and it is what this config still
+// owes: each spec declares its target story via the `acceptanceStory()` helper →
+// `acceptance-story.json` sidecar, and `chapter()` writes `chapters.json` beside
+// it, so whoever publishes can resolve a recording to its story. A failing run
+// leaves no video — a red acceptance E2E still produces no receipt.
 
 loadEnv();
 
@@ -40,7 +46,7 @@ export default defineConfig({
   fullyParallel: false,
   forbidOnly: Boolean(process.env['CI']),
   // NO retries, even in CI. A retry would record a SECOND clip for the same
-  // spec, and the uploader would then publish whichever the walk yielded — a
+  // spec, and whoever publishes would then have to choose between them — a
   // receipt of an attempt nobody chose. A flaky acceptance spec is a bug to fix.
   retries: 0,
   workers: 1,
