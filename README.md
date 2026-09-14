@@ -194,9 +194,9 @@ prisma/       Prisma schema + migrations. Edit `schema.prisma`, run
 tests/        Vitest integration tests (real Postgres) + Playwright E2E
               specs in `tests/e2e/`. See `playwright.config.ts` and
               `vitest.config.ts`.
-design/       Design assets — three files per surface, published to the work
-              item by the agent that drew them, with Motir's
-              `publish_design_result` tool. See `design/README.md`.
+design/       Design assets — two files per surface (notes + mock), published
+              to the work item with Motir's `publish_design_result` tool
+              when work waits on the design. See `design/README.md`.
 docs/         Project docs.
 scripts/      Dev scripts. `db-up.sh` brings up Docker Postgres + migrations.
 public/       Static assets.
@@ -227,11 +227,13 @@ Jobs:
 
 ### There is NO design-result lane — the agent publishes
 
-A design task's result — the `design-notes.md` sections it wrote, the
-`*.mock.html` mock and the `.png` export — reaches its work item in Motir
-because **the agent that drew it calls `publish_design_result`**, naming the
-card. A reviewer then reads it on the card instead of opening raw files on
-GitHub. There is no workflow, no check and no repository secret involved, and
+A design task's result — the `*.mock.html` mock(s), with the area's
+`design-notes.md` one link away — reaches its work item in Motir because **the
+agent that drew it calls `publish_design_result`**, naming the card, and it does
+so **only when an open work item is `blocked_by` the design**; a design nothing
+waits on publishes no result, and its pull request is its review. A reviewer
+reads a published result on the card instead of opening raw files on GitHub.
+There is no workflow, no check and no repository secret involved, and
 `design/README.md` is the authoring guide.
 
 This repository shipped a `design-result.yml` lane until MOTIR-3797, and it is
