@@ -1,10 +1,8 @@
-// ⚠️ THIS FILE IS THE SURVIVING HALF of `tests/acceptance-video-uploader.test.ts`
-// (MOTIR-4097). That file was vendored from motir-core alongside
-// `scripts/upload-acceptance-video.mjs`, and it carried TWO unrelated things: the
-// uploader's unit tests, which went with the uploader, and a starter-local block
-// asserting on THIS repo's acceptance workflow, which did not. The lane
-// assertions are re-homed here, under motir-core's own name for the same file, so
-// a future re-sync has an obvious counterpart to read against.
+// ⚠️ THIS FILE HOLDS THE STARTER-LOCAL LANE ASSERTIONS that used to sit at the foot
+// of the vendored `tests/acceptance-video-uploader.test.ts` (MOTIR-4097 moved them
+// here, under motir-core's own name for the same file). Since MOTIR-7255 the
+// uploader test is vendored again, verbatim, and these stay here — so the vendored
+// file stays a pure copy and this one is the repo's own.
 //
 // A workflow file is not typechecked, linted or executed by any suite, so the
 // properties that make this lane HONEST are asserted here or nowhere.
@@ -142,84 +140,87 @@ describe('the acceptance lane is spec-scoped (MOTIR-1958)', () => {
   });
 });
 
-// ── MOTIR-4097 ───────────────────────────────────────────────────────────────
+// ── MOTIR-7255 (reversing MOTIR-4097's publisher retirement) ──────────────────
 //
-// The lane RECORDS and no longer PUBLISHES. CI stopped uploading the acceptance
-// recording on 2026-09-01; the receipt is published by the AGENT over the Motir
-// MCP surface, and the whole vendored publishing apparatus — the publish step,
-// `scripts/upload-acceptance-video.mjs`, `.github/actions/upload-acceptance-video/`,
-// the `ACCEPTANCE_*` env names and the owned-specs step that fed them — is gone,
-// mirroring motir-core's MOTIR-4096.
+// From 2026-09-02 (MOTIR-4097) this lane RECORDED and the agent published the
+// receipt over the Motir MCP surface. On 2026-10-01 CI became the publisher
+// again in the repositories Motir writes — motir-core (MOTIR-7253) and every
+// project generated from this template — so the vendored uploader and its
+// action are back, wired PR-only over keyless OIDC. These guards pin that shape
+// and keep the two properties the retirement was protecting: NO Motir token in
+// any job (a template that asks for a secret asks every generated project for
+// one), and publishing ONLY from a green pull-request run (publishing supersedes
+// a story's receipt, MOTIR-1937).
 //
-// These are RETIREMENT guards, and they are the reason this block exists rather
-// than the deletions simply being made. A deleted mechanism leaves no error
-// message behind: nothing about a workflow is type-checked or linted, so a
-// publish step re-vendored from an older copy of motir-core, or a
-// `MOTIR_UPLOAD_TOKEN` wired back into a job "while we are in here", would ship
-// silently — and it would ship into every project scaffolded from this template.
-//
-// ⚠️ THE PREDICATE IS SCOPED TO `.github/`, NOT TO THE REPOSITORY.
-// `tests/e2e/_helpers/acceptance-video.ts` (the recording harness) keeps its
-// name deliberately — motir-core keeps it too, and specs import from it. What
-// must not come back is a CI JOB that publishes, or one handed a Motir
-// credential.
-describe('the lane records and does not publish (MOTIR-4097)', () => {
+// A workflow file is not type-checked or linted, so a copy-paste that passes a
+// token or drops a gate would ship silently into every scaffolded project.
+describe('the lane publishes on a green PR run, over OIDC only (MOTIR-7255)', () => {
+  /** The `acceptance` job's steps, each as its own text. */
+  const steps = (): string[] =>
+    job('acceptance')
+      .split(/^ {6}- /m)
+      .slice(1);
+  const publishStep = (): string | undefined =>
+    steps().find((s) => /name:\s*Publish the acceptance receipt/.test(s));
+
   it('finds the CI files it is meant to police', () => {
-    // Every assertion below is an ABSENCE, and a walker that returns nothing
-    // reads exactly like a repository with nothing to find. `.github/` holds at
-    // least the three workflows.
     const files = ciYaml().map(([f]) => f);
     expect(files).toContain('.github/workflows/acceptance-tests.yml');
-    expect(files.length).toBeGreaterThanOrEqual(3);
+    expect(files).toContain('.github/actions/upload-acceptance-video/action.yml');
   });
 
-  it('no workflow or action runs the retired uploader', () => {
-    const offenders = ciYaml()
-      .filter(([, text]) => /upload-acceptance-video/.test(codeOf(text)))
-      .map(([f]) => f);
-    expect(offenders).toEqual([]);
-    expect(fs.existsSync(path.join(process.cwd(), 'scripts/upload-acceptance-video.mjs'))).toBe(
-      false,
+  it('the publish step uses the LOCAL vendored action, gated on success() AND pull_request', () => {
+    const step = publishStep();
+    expect(step, 'no `Publish the acceptance receipt` step in the acceptance job').toBeDefined();
+    expect(step).toMatch(/uses:\s*\.\/\.github\/actions\/upload-acceptance-video\s*$/m);
+    expect(step).toMatch(/^\s*if:\s*success\(\) && github\.event_name == 'pull_request'\s*$/m);
+    // It is the only publisher, and it reads the owned-spec list.
+    expect(steps().filter((s) => /upload-acceptance-video/.test(s))).toHaveLength(1);
+    expect(step).toMatch(/changed-specs:\s*\$\{\{\s*steps\.owned-specs\.outputs\.specs\s*\}\}/);
+  });
+
+  it('owns only the specs the PR changed, and nothing on a push', () => {
+    const acceptance = job('acceptance');
+    expect(acceptance).toContain('id: owned-specs');
+    expect(acceptance).toContain(
+      `git diff --name-only "\${BASE_SHA}" HEAD -- 'tests/e2e/acceptance*.spec.ts'`,
     );
-    expect(fs.existsSync(path.join(process.cwd(), '.github/actions/upload-acceptance-video'))).toBe(
-      false,
+    expect(acceptance).toMatch(
+      /if \[ -z "\$\{BASE_SHA\}" \]; then[\s\S]*?echo "specs=" >> "\$GITHUB_OUTPUT"[\s\S]*?exit 0/,
     );
   });
 
-  it('no job anywhere is handed a Motir credential', () => {
-    // The security half: the publish step shipped an `integration` PAT into a job
-    // that has nothing left to do with it, and a credential with no consumer is
-    // one nobody thinks about when deciding whether to rotate it. In a TEMPLATE
-    // it is also a secret every scaffolded project is told to create.
+  it('grants `id-token: write` on the acceptance job, and on no other job', () => {
+    expect(job('acceptance')).toMatch(/^\s*id-token:\s*write\s*$/m);
+    expect(job('membership')).not.toMatch(/id-token/);
+    // Never at workflow level, where every job would inherit it.
+    expect(code.split(/^jobs:\s*$/m)[0]).not.toMatch(/id-token/);
+  });
+
+  it('passes no token to the action, and no job is handed a Motir credential', () => {
+    // OIDC only: a Motir-hosted repository is App-connected at creation. The
+    // action's `token` input is for a repository with no App connection.
+    expect(publishStep()).not.toMatch(/^\s*token:/m);
     const offenders = ciYaml()
-      .filter(([, text]) => /MOTIR_UPLOAD_TOKEN/.test(codeOf(text)))
+      .filter(([f]) => f.startsWith('.github/workflows/'))
+      .filter(([, text]) =>
+        /MOTIR_UPLOAD_TOKEN|MOTIR_PUBLISH_TOKEN|secrets\.MOTIR/.test(codeOf(text)),
+      )
       .map(([f]) => f);
     expect(offenders).toEqual([]);
   });
 
-  it('the acceptance lane keeps no publish scaffolding of its own', () => {
-    // The env names and the owned-specs step existed ONLY to feed the uploader:
-    // `changed-specs` was the ownership filter (MOTIR-1937), and the step that
-    // computed it diffed the PR's base for changed specs. With nothing reading
-    // them they are dead weight that reads like live machinery.
-    expect(code).not.toMatch(/ACCEPTANCE_[A-Z_]+:/);
-    expect(code).not.toContain('owned-specs');
-    expect(code).not.toContain('BASE_SHA');
-  });
-
-  it('mints no OIDC token — nothing in any workflow publishes', () => {
-    // Keyless publish (MOTIR-1650) is what `id-token: write` was for.
-    const offenders = ciYaml()
-      .filter(([, text]) => /^\s*id-token:\s*write/m.test(codeOf(text)))
-      .map(([f]) => f);
-    expect(offenders).toEqual([]);
+  it('the vendored copies name the motir-core commit they were synced from', () => {
+    // So the next sync is a `diff`, not archaeology (MOTIR-2693).
+    const sync = /SYNC POINT: motir-core @ [0-9a-f]{7,40}\b/;
+    expect(fs.readFileSync('scripts/upload-acceptance-video.mjs', 'utf8')).toMatch(sync);
+    expect(fs.readFileSync('.github/actions/upload-acceptance-video/action.yml', 'utf8')).toMatch(
+      sync,
+    );
+    expect(fs.readFileSync('tests/acceptance-video-uploader.test.ts', 'utf8')).toMatch(sync);
   });
 
   it('still RECORDS, and still keeps the report the recording is read from', () => {
-    // The negative controls for the four assertions above. Retiring the uploader
-    // must not retire the recording: the clips, traces and `chapters.json` are
-    // what the agent publishes FROM, so a lane that stopped emitting them would
-    // pass every "no publisher" check while destroying the deliverable.
     expect(fs.readFileSync(ACCEPTANCE_CONFIG, 'utf8')).toMatch(/mode:\s*'on'/);
     const acceptance = job('acceptance');
     expect(acceptance).toContain('name: playwright-report-acceptance');

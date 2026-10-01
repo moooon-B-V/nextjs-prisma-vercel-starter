@@ -268,9 +268,11 @@ just to compute the condition. Only an untriggered _workflow_ leaves nothing on
 the PR. On a PR that does change a spec, the lane runs and uploads its Playwright report,
 which is where the clips, traces and `chapters.json` sidecars survive.
 
-**CI does not publish the receipt** — the agent does, over the Motir MCP surface,
-the same way it publishes a design result (MOTIR-4097). There is no repository
-secret to set and no `id-token` grant to make. See
+**CI publishes the receipt** from a green pull-request run, over keyless GitHub
+OIDC (MOTIR-7255): the lane's `Publish the acceptance receipt` step runs the
+vendored uploader for the specs that PR changed. A Motir-hosted repository is
+connected to the Motir GitHub App at creation, so there is no repository secret
+to set. An agent working here sees that step and does not publish over MCP. See
 [`docs/acceptance-video.md`](docs/acceptance-video.md).
 
 Because it is a separate workflow it cannot depend on `ci.yml`'s `build` job —
