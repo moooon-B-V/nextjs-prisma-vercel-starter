@@ -1,8 +1,8 @@
 # ⚠️ VENDORED FROM `motir-core` (MOTIR-1941; restored by MOTIR-7255, Story MOTIR-7250)
 # alongside `scripts/upload-acceptance-video.mjs`, which this composite runs from
 # the CALLER's workspace — the reason it is a copy rather than a remote reference.
-# SYNC POINT: motir-core @ 39ee176ba9 (2026-10-01, MOTIR-7253 — head of PR #3333's
-# branch, squash-merged to main under a different sha). The body below is upstream
+# SYNC POINT: motir-core `main` @ 9e2afeabdb (2026-10-02, PR #3333 — MOTIR-7253;
+# identical to its branch head 39ee176ba9). The body below is upstream
 # verbatim; this comment header is the only local edit (MOTIR-2693).
 #
 name: Upload acceptance video

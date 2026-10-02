@@ -13,9 +13,9 @@
 // uploader"); if that amendment is ever reversed, this copy is no longer wanted.
 // It was retired here on 2026-09-02 (MOTIR-4097) and restored on 2026-10-01.
 //
-// SYNC POINT: motir-core @ 39ee176ba9 (2026-10-01, MOTIR-7253 — the publisher restore;
-// head of PR #3333's branch `parent/MOTIR-7250-ci-publishes-acceptance-receipt`,
-// which is squash-merged to main under a different sha), carrying MOTIR-7253's
+// SYNC POINT: motir-core `main` @ 9e2afeabdb (2026-10-02, PR #3333, Story MOTIR-7250 —
+// the publisher restore MOTIR-7253; byte-identical to its branch head 39ee176ba9,
+// which this copy was first taken from), carrying MOTIR-7253's
 // `ACCEPTANCE_EVIDENCE_STORY_CLOSED` skip and the PR's card key as `producedByKey`.
 // The BODY BELOW IS UPSTREAM VERBATIM — this header is the only local edit,
 // deliberately, so the next sync is `diff` and not archaeology (MOTIR-2693).

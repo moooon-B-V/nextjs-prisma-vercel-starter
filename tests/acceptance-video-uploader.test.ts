@@ -2,8 +2,8 @@
 // `scripts/upload-acceptance-video.mjs` — the pair is copied together precisely so
 // a bad sync fails locally. Keep it in sync; fix bugs upstream and re-copy.
 //
-// SYNC POINT: motir-core @ 39ee176ba9 (2026-10-01, MOTIR-7253 — head of PR #3333's
-// branch, squash-merged to main under a different sha). Upstream verbatim except
+// SYNC POINT: motir-core `main` @ 9e2afeabdb (2026-10-02, PR #3333 — MOTIR-7253;
+// identical to its branch head 39ee176ba9). Upstream verbatim except
 // for ONE marked divergence: the `STORY_CLOSED_CODE` pin, which upstream anchors to
 // a motir-core service class (`@/lib/acceptanceEvidence/errors`) this repo does not
 // have. It is commented where it occurs. Record the new commit here when you

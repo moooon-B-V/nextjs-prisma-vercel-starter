@@ -212,7 +212,7 @@ describe('the lane publishes on a green PR run, over OIDC only (MOTIR-7255)', ()
 
   it('the vendored copies name the motir-core commit they were synced from', () => {
     // So the next sync is a `diff`, not archaeology (MOTIR-2693).
-    const sync = /SYNC POINT: motir-core @ [0-9a-f]{7,40}\b/;
+    const sync = /SYNC POINT: motir-core (`main` )?@ [0-9a-f]{7,40}\b/;
     expect(fs.readFileSync('scripts/upload-acceptance-video.mjs', 'utf8')).toMatch(sync);
     expect(fs.readFileSync('.github/actions/upload-acceptance-video/action.yml', 'utf8')).toMatch(
       sync,
